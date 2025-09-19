@@ -80,6 +80,16 @@ router.post('/', authenticateToken, async (req, res) => {
         include: { items: true }
       });
 
+      // Record inventory reservations for each order item
+      for (const it of order.items) {
+        try {
+          await prismaTx.inventoryMovement.create({ data: { productId: it.productId, type: 'reserve', quantity: it.quantity, metadata: { orderId: order.id } } });
+        } catch (mvErr) {
+          console.warn('Failed to record inventory movement for reservation', mvErr);
+          // non-fatal: continue
+        }
+      }
+
       return order;
     });
     // Diagnostic: read product stock after transaction
@@ -101,3 +111,30 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 export default router;
+
+// POST /api/orders/:id/cancel - cancel an order and release reserved stock
+router.post('/:id/cancel', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+  try {
+    const order = await prisma.order.findUnique({ where: { id: parseInt(id) }, include: { items: true } });
+    if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
+    // Only admin or order owner can cancel
+    if (user.role !== 'admin' && user.id !== order.userId) return res.status(403).json({ error: 'Accesso negato' });
+    if (order.status === 'cancelled') return res.status(400).json({ error: 'Ordine già cancellato' });
+
+    // Release stock in a transaction and log movements
+    await prisma.$transaction(async (prismaTx) => {
+      for (const it of order.items) {
+        await prismaTx.product.update({ where: { id: it.productId }, data: { stock: { increment: it.quantity } } });
+        await prismaTx.inventoryMovement.create({ data: { productId: it.productId, type: 'release', quantity: it.quantity, metadata: { orderId: order.id } } });
+      }
+      await prismaTx.order.update({ where: { id: order.id }, data: { status: 'cancelled' } });
+    });
+
+    res.json({ cancelled: true });
+  } catch (err) {
+    console.error('Cancel order error', err);
+    res.status(500).json({ error: 'Errore cancellazione ordine' });
+  }
+});
