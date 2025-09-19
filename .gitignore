@@ -31,7 +31,7 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+.env*
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +39,15 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Backend-specific
+backend/node_modules/
+backend/dev.db
+backend/.env
+backend/.env.*
+
+# Backup folders we created
+backend.bak.*
+
+# Local DB files
+dev.db

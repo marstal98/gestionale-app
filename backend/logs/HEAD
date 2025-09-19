@@ -1,0 +1,5 @@
+0000000000000000000000000000000000000000 cc3012a24ae1eb9f607bc31971ad1374b20bd98e marstal98 <marcostallons@gmail.com> 1758303187 +0200	commit (initial): Initial commit
+cc3012a24ae1eb9f607bc31971ad1374b20bd98e a1364ca578bea9773119fa9eeb6d1fdb389d84c7 marstal98 <marcostallons@gmail.com> 1758303429 +0200	rebase (start): checkout origin/main
+a1364ca578bea9773119fa9eeb6d1fdb389d84c7 de7bff3f8597ce0428bccda4320ff74e62458e82 marstal98 <marcostallons@gmail.com> 1758303429 +0200	rebase (pick): Initial commit
+de7bff3f8597ce0428bccda4320ff74e62458e82 de7bff3f8597ce0428bccda4320ff74e62458e82 marstal98 <marcostallons@gmail.com> 1758303429 +0200	rebase (finish): returning to refs/heads/main
+de7bff3f8597ce0428bccda4320ff74e62458e82 2ad785aee139bb20e24308889bfe8de5a568ebd2 marstal98 <marcostallons@gmail.com> 1758303880 +0200	commit: Aggiungi modelli e rotte per gestione prodotti e ordini, aggiorna script di avvio
