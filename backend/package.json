@@ -1,7 +1,8 @@
 {
   "name": "gestionale-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "type": "module",
+  "main": "src/server.js",
   "scripts": {
     "dev": "node --experimental-vm-modules ./src/server.js",
     "seed": "node ./prisma/seed.js",

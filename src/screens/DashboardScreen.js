@@ -37,7 +37,34 @@ export default function DashboardScreen({ navigation }) {
           : 0;
         const inProgress = totalOrders - completed;
 
-        setStats({ users: totalUsers, orders: totalOrders, inProgress, completed });
+        // build last 30 days counts for chart using per-order bucketing
+        const buckets = Array.from({ length: 30 }).map(() => 0);
+        const today = new Date();
+        const todayStart = new Date(today);
+        todayStart.setHours(0,0,0,0);
+        const msPerDay = 24 * 60 * 60 * 1000;
+
+        if (Array.isArray(ordersData)) {
+          for (const o of ordersData) {
+            const dateStr = o.createdAt || o.created_at || o.created || o.createdAtAt || null;
+            if (!dateStr) continue;
+            const d = new Date(dateStr);
+            if (Number.isNaN(d.getTime())) continue;
+            // difference in whole days from todayStart
+            const diff = Math.floor((todayStart - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / msPerDay);
+            // diff = 0 means order is today, diff = 1 yesterday, ..., diff = 29 -> 29 days ago
+            if (diff >= 0 && diff < 30) {
+              // index: oldest (29 days ago) -> newest (0 days ago)
+              const idx = 29 - diff;
+              buckets[idx] = (buckets[idx] || 0) + 1;
+            }
+          }
+        }
+
+        // debug log: show counts and buckets
+        try { console.log('[Dashboard] orders:', Array.isArray(ordersData) ? ordersData.length : 0, 'buckets:', buckets); } catch (e) {}
+
+        setStats({ users: totalUsers, orders: totalOrders, inProgress, completed, last30: buckets });
 
         // recent users - take latest by createdAt if present
         if (Array.isArray(usersData)) {
@@ -103,7 +130,7 @@ export default function DashboardScreen({ navigation }) {
 
         <View style={styles.section}>
           <Text style={{ fontWeight: '700', marginBottom: 8 }}>Andamento ordini (ultimi 30 giorni)</Text>
-          <MiniBarChart data={[3,5,2,6,8,4,7,5,6,8,4,6,7,8,5,4,3,5,6,7,8,6,5,4,3,2,5,6,4,7]} />
+          <MiniBarChart data={stats?.last30 || []} />
         </View>
 
         {/* quick buttons removed as requested */}
@@ -124,7 +151,17 @@ export default function DashboardScreen({ navigation }) {
   if (user?.role === 'employee') {
     return (
       <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
-        <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+        <View style={[styles.headerRow, { alignItems: 'center' }] }>
+          <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+          <IconButton
+            icon="logout-variant"
+            size={24}
+            color={theme.colors.primary}
+            onPress={logout}
+            accessibilityLabel="Logout"
+            style={{ marginLeft: 'auto' }}
+          />
+        </View>
 
         <View style={styles.section}>
           <Text style={{ fontWeight: '700', marginBottom: 8 }}>Ordini assegnati a te</Text>
@@ -147,7 +184,17 @@ export default function DashboardScreen({ navigation }) {
   // Customer layout
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
-      <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+      <View style={[styles.headerRow, { alignItems: 'center' }] }>
+        <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+        <IconButton
+          icon="logout-variant"
+          size={24}
+          color={theme.colors.primary}
+          onPress={logout}
+          accessibilityLabel="Logout"
+          style={{ marginLeft: 'auto' }}
+        />
+      </View>
 
       <View style={styles.section}>
         <Text style={{ marginBottom: 12 }}>I miei ordini recenti</Text>

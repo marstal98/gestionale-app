@@ -40,7 +40,7 @@ export default function LoginScreen() {
       setAuthProcessing(true);
       // start counting from when spinner becomes visible
       start = Date.now();
-      console.log("Invio login a:", `${API_URL}/login`);
+      console.log("Invio login a:", `${API_URL}/auth/login`);
 
       const response = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
@@ -59,8 +59,6 @@ export default function LoginScreen() {
         if (elapsed < minDuration) {
           await new Promise((r) => setTimeout(r, minDuration - elapsed));
         }
-        setLoading(false);
-        setAuthProcessing(false);
         setToastMsg(data.error || "Credenziali non valide");
         setToastType("error");
         setToastVisible(true);
@@ -73,11 +71,15 @@ export default function LoginScreen() {
         await new Promise((r) => setTimeout(r, minDuration - elapsedSuccess));
       }
 
-      await login(data);
-
-      // If login does not navigate, ensure loading is stopped
-      setLoading(false);
-      setAuthProcessing(false);
+      // Ensure we await login but also guard against unexpected errors
+      try {
+        await login(data);
+      } catch (innerErr) {
+        console.error("Errore durante login():", innerErr);
+        setToastMsg("Errore interno durante l'accesso");
+        setToastType("error");
+        setToastVisible(true);
+      }
 
     } catch (err) {
       console.error("Errore fetch:", err);
@@ -85,11 +87,13 @@ export default function LoginScreen() {
       if (elapsedErr < minDuration) {
         await new Promise((r) => setTimeout(r, minDuration - elapsedErr));
       }
-      setLoading(false);
-      setAuthProcessing(false);
       setToastMsg("Impossibile connettersi al server");
       setToastType("error");
       setToastVisible(true);
+    } finally {
+      // Always clear loading/authProcessing in a finally block
+      setLoading(false);
+      setAuthProcessing(false);
     }
   };
 

@@ -6,11 +6,14 @@ export default function MiniBarChart({ data = [], height = 60, color = '#7E57C2'
   const max = Math.max(...data, 1);
   return (
     <View style={[styles.row, { height }]}> 
-      {data.map((v, i) => (
-        <View key={i} style={[styles.barContainer]}> 
-          <View style={[styles.bar, { height: `${(v / max) * 100}%`, backgroundColor: color }]} />
-        </View>
-      ))}
+      {data.map((v, i) => {
+        const pct = v > 0 ? (v / max) * 100 : 4; // minimal visible bar for zeros
+        return (
+          <View key={i} style={styles.barContainer}> 
+            <View style={[styles.bar, { height: `${pct}%`, backgroundColor: color }]} />
+          </View>
+        );
+      })}
     </View>
   );
 }

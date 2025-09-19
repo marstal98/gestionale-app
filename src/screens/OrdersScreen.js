@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from "react";
-import { View, StyleSheet, FlatList } from "react-native";
+import { View, StyleSheet, FlatList, StatusBar } from "react-native";
 import { Text, Card, Button, Portal, Dialog, TextInput } from "react-native-paper";
 import { AuthContext } from "../context/AuthContext";
 import { API_URL } from "../config";
@@ -13,6 +13,7 @@ export default function OrdersScreen() {
   // order form
   const [showDialog, setShowDialog] = useState(false);
   const [selectedItems, setSelectedItems] = useState([]); // [{productId, quantity}]
+  const [selectedOrder, setSelectedOrder] = useState(null);
 
   const fetchData = async () => {
     try {
@@ -56,18 +57,20 @@ export default function OrdersScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: 50 }]}>
+      <StatusBar backgroundColor="transparent" barStyle="dark-content" translucent />
       <Text style={styles.title}>Gestione Ordini 📦</Text>
 
       <FlatList
         data={orders}
         keyExtractor={o => o.id.toString()}
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: 16, paddingTop: 8 }}
         renderItem={({item}) => (
-          <Card style={{ marginBottom: 12 }}>
+          <Card style={{ marginBottom: 12 }} onPress={() => { setSelectedOrder(item); setShowDialog(true); }}>
             <Card.Content>
               <Text>#{item.id} - {item.status}</Text>
               <Text>Totale: €{item.total}</Text>
+              <Text>Cliente: {item.customerName || item.user?.name || item.user?.email || '—'}</Text>
             </Card.Content>
           </Card>
         )}
@@ -78,47 +81,76 @@ export default function OrdersScreen() {
       )}
 
       <Portal>
-        <Dialog visible={showDialog} onDismiss={() => setShowDialog(false)}>
-          <Dialog.Title>Seleziona prodotti</Dialog.Title>
-          <Dialog.Content>
-            {products.map(p => {
-              const sel = selectedItems.find(i => i.productId === p.id);
-              // validation for selected item
-              let error = '';
-              if (sel) {
-                if (!Number.isInteger(sel.quantity) || sel.quantity <= 0) error = 'Quantità minima 1';
-                else if (typeof p.stock === 'number' && sel.quantity > p.stock) error = `Massimo ${p.stock} disponibili`;
-              }
+        {/* If creating a new order (customer) show the product selection dialog */}
+        {user?.role === 'customer' && (
+          <Dialog visible={showDialog && !selectedOrder} onDismiss={() => setShowDialog(false)}>
+            <Dialog.Title>Seleziona prodotti</Dialog.Title>
+            <Dialog.Content>
+              {products.map(p => {
+                const sel = selectedItems.find(i => i.productId === p.id);
+                let error = '';
+                if (sel) {
+                  if (!Number.isInteger(sel.quantity) || sel.quantity <= 0) error = 'Quantità minima 1';
+                  else if (typeof p.stock === 'number' && sel.quantity > p.stock) error = `Massimo ${p.stock} disponibili`;
+                }
 
-              return (
-                <View key={p.id} style={{ marginBottom:8 }}>
-                  <Text>{p.name} - €{p.price} (Disponibile: {p.stock})</Text>
-                  <Button mode={sel ? 'contained' : 'outlined'} onPress={() => toggleSelectProduct(p)} style={{ marginTop:6 }}>{sel ? 'Selezionato' : 'Seleziona'}</Button>
-                  {sel && (
-                    <>
-                      <TextInput
-                        label="Quantità"
-                        value={String(sel.quantity)}
-                        onChangeText={(t) => changeQty(p.id, t)}
-                        keyboardType="numeric"
-                      />
-                      {error ? <Text style={{ color: 'red', marginTop: 4 }}>{error}</Text> : null}
-                    </>
-                  )}
-                </View>
-              );
-            })}
+                return (
+                  <View key={p.id} style={{ marginBottom:8 }}>
+                    <Text>{p.name} - €{p.price} (Disponibile: {p.stock})</Text>
+                    <Button mode={sel ? 'contained' : 'outlined'} onPress={() => toggleSelectProduct(p)} style={{ marginTop:6 }}>{sel ? 'Selezionato' : 'Seleziona'}</Button>
+                    {sel && (
+                      <>
+                        <TextInput
+                          label="Quantità"
+                          value={String(sel.quantity)}
+                          onChangeText={(t) => changeQty(p.id, t)}
+                          keyboardType="numeric"
+                        />
+                        {error ? <Text style={{ color: 'red', marginTop: 4 }}>{error}</Text> : null}
+                      </>
+                    )}
+                  </View>
+                );
+              })}
+            </Dialog.Content>
+            <Dialog.Actions>
+              <Button onPress={() => setShowDialog(false)}>Annulla</Button>
+              <Button onPress={createOrder} disabled={selectedItems.length === 0 || selectedItems.some(si => {
+                const prod = products.find(p => p.id === si.productId);
+                if (!prod) return true;
+                if (!Number.isInteger(si.quantity) || si.quantity <= 0) return true;
+                if (typeof prod.stock === 'number' && si.quantity > prod.stock) return true;
+                return false;
+              })}>Crea</Button>
+            </Dialog.Actions>
+          </Dialog>
+        )}
+
+        {/* Order details dialog shown when selectedOrder is set */}
+        <Dialog visible={!!selectedOrder} onDismiss={() => { setSelectedOrder(null); setShowDialog(false); }} style={{ maxHeight: 600 }}>
+          <Dialog.Title>Dettagli ordine #{selectedOrder?.id}</Dialog.Title>
+          <Dialog.Content>
+            {selectedOrder ? (
+              <>
+                <Text>Status: {selectedOrder.status}</Text>
+                <Text>Cliente: {selectedOrder.customerName || selectedOrder.user?.name || selectedOrder.user?.email || '—'}</Text>
+                <Text>Creato: {new Date(selectedOrder.createdAt).toLocaleString()}</Text>
+                <Text style={{ marginTop: 8, fontWeight: '700' }}>Articoli:</Text>
+                {selectedOrder.items && selectedOrder.items.map((it) => {
+                  const prod = products.find(p => p.id === it.productId) || {};
+                  return (
+                    <View key={it.id} style={{ marginTop: 6 }}>
+                      <Text>{prod.name || `Prodotto ${it.productId}`} — Qtà: {it.quantity} — Prezzo unitario: €{it.unitPrice} — Subtotale: €{(it.quantity * it.unitPrice).toFixed(2)}</Text>
+                    </View>
+                  );
+                })}
+                <Text style={{ marginTop: 8, fontWeight: '700' }}>Totale ordine: €{selectedOrder.total}</Text>
+                {selectedOrder.notes ? <Text style={{ marginTop: 8 }}>Note: {selectedOrder.notes}</Text> : null}
+              </>
+            ) : null}
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setShowDialog(false)}>Annulla</Button>
-            {/* Disable create when no items selected or any validation errors present */}
-            <Button onPress={createOrder} disabled={selectedItems.length === 0 || selectedItems.some(si => {
-              const prod = products.find(p => p.id === si.productId);
-              if (!prod) return true;
-              if (!Number.isInteger(si.quantity) || si.quantity <= 0) return true;
-              if (typeof prod.stock === 'number' && si.quantity > prod.stock) return true;
-              return false;
-            })}>Crea</Button>
+            <Button onPress={() => { setSelectedOrder(null); setShowDialog(false); }}>Chiudi</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

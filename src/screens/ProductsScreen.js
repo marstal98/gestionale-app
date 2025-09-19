@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useContext } from 'react';
-import { View, StyleSheet, FlatList } from 'react-native';
+import { View, StyleSheet, FlatList, StatusBar } from 'react-native';
 import { Text, Card, Button, FAB, Dialog, Portal, TextInput } from 'react-native-paper';
 import { AuthContext } from '../context/AuthContext';
 import { API_URL } from '../config';
@@ -20,6 +20,8 @@ export default function ProductsScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastType, setToastType] = useState('success');
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [productToDelete, setProductToDelete] = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToastMsg(msg);
@@ -78,8 +80,21 @@ export default function ProductsScreen() {
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
   };
 
+  const confirmDelete = (p) => {
+    setProductToDelete(p);
+    setShowConfirmDelete(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!productToDelete) return;
+    await handleDelete(productToDelete);
+    setShowConfirmDelete(false);
+    setProductToDelete(null);
+  };
+
   return (
-    <View style={{ flex:1, backgroundColor:'#F9F9FB' }}>
+    <View style={{ flex:1, backgroundColor:'#F9F9FB', paddingTop: 50 }}>
+      <StatusBar backgroundColor="transparent" barStyle="dark-content" translucent />
       <FlatList
         data={products}
         keyExtractor={i => i.id.toString()}
@@ -93,9 +108,9 @@ export default function ProductsScreen() {
               <Text>Disponibilità: {item.stock}</Text>
             </Card.Content>
             {user?.role === 'admin' && (
-              <Card.Actions style={{ justifyContent:'flex-end' }}>
-                <Button onPress={() => openDialog(item)} icon="pencil" textColor="#7E57C2">Modifica</Button>
-                <Button onPress={() => handleDelete(item)} icon="delete" textColor="red">Elimina</Button>
+              <Card.Actions style={styles.actions}>
+                <Button mode="text" onPress={() => openDialog(item)} icon="pencil" textColor="#7E57C2">Modifica</Button>
+                <Button mode="text" onPress={() => confirmDelete(item)} icon="delete" textColor="red">Elimina</Button>
               </Card.Actions>
             )}
           </Card>
@@ -118,6 +133,19 @@ export default function ProductsScreen() {
           <Dialog.Actions>
             <Button onPress={() => setShowDialog(false)}>Annulla</Button>
             <Button onPress={handleSave}>Salva</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
+      <Portal>
+        <Dialog visible={showConfirmDelete} onDismiss={() => setShowConfirmDelete(false)} style={styles.dialog}>
+          <Dialog.Title>Conferma</Dialog.Title>
+          <Dialog.Content>
+            <Text>Vuoi davvero eliminare il prodotto "{productToDelete?.name}"?</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowConfirmDelete(false)}>Annulla</Button>
+            <Button textColor="red" onPress={handleConfirmDelete}>Elimina</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

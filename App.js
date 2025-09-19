@@ -42,6 +42,7 @@ function AdminTabs() {
         tabBarIcon: ({ color, size }) => {
           let iconName;
           if (route.name === "Home") iconName = "home";
+          else if (route.name === "Prodotti") iconName = "basket";
           else if (route.name === "Utenti") iconName = "account-group";
           else if (route.name === "Ordini") iconName = "package-variant-closed";
           else if (route.name === "Impostazioni") iconName = "cog";

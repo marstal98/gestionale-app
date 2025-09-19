@@ -1,14 +1,16 @@
 import { Platform } from "react-native";
 
-const localhost =
-  Platform.OS === "android" ? "10.0.2.2" : "localhost";
-
 // If you want to test on a physical device in the LAN, set LAN_IP to your machine IP.
-const LAN_IP = "192.168.1.135"; // change if needed
+const LAN_IP = "192.168.1.135"; // <- your provided IP
 
-// Default to localhost for development (unified backend). Use LAN_IP for physical devices.
+// Use the correct host depending on platform:
+// - Android physical device should use the LAN IP
+// - Other cases can use localhost
+const host = Platform.OS === "android" ? LAN_IP : "localhost";
+
+// Default to host for development (unified backend). Use LAN_IP for physical devices.
 export const API_URL = __DEV__
-  ? `http://${localhost}:4000/api` // development uses localhost
+  ? `http://${host}:4000/api` // development uses host
   : `https://your-production-api.example.com/api`;
 
 // Durata minima (ms) dello spinner di login
