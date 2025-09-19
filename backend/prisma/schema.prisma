@@ -21,6 +21,7 @@ model User {
   email     String   @unique
   password  String   // hash bcrypt
   role      Role     @default(customer)
+  isActive  Boolean  @default(true)
   orders    Order[]
   createdAt DateTime @default(now())
 }

@@ -1,9 +1,12 @@
 import React, { useEffect, useState, useContext } from 'react';
-import { View, StyleSheet, FlatList, StatusBar } from 'react-native';
-import { Text, Card, Button, FAB, Dialog, Portal, TextInput } from 'react-native-paper';
+import { View, StyleSheet, FlatList, StatusBar, Share } from 'react-native';
+import { Text, Card, Button, FAB, Dialog, Portal, TextInput, ActivityIndicator } from 'react-native-paper';
 import { AuthContext } from '../context/AuthContext';
 import { API_URL } from '../config';
 import FloatingToast from '../components/FloatingToast';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
 export default function ProductsScreen() {
   const { token, user } = useContext(AuthContext);
@@ -22,6 +25,15 @@ export default function ProductsScreen() {
   const [toastType, setToastType] = useState('success');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [importReport, setImportReport] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportCsv, setExportCsv] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [tooltip, setTooltip] = useState({ visible: false, text: '', bottom: 0 });
 
   const showToast = (msg, type = 'success') => {
     setToastMsg(msg);
@@ -95,6 +107,8 @@ export default function ProductsScreen() {
   return (
     <View style={{ flex:1, backgroundColor:'#F9F9FB', paddingTop: 50 }}>
       <StatusBar backgroundColor="transparent" barStyle="dark-content" translucent />
+      {/* left floating import/export FABs will be rendered below */}
+
       <FlatList
         data={products}
         keyExtractor={i => i.id.toString()}
@@ -121,7 +135,118 @@ export default function ProductsScreen() {
         <FAB icon="plus" style={styles.fab} onPress={() => openDialog()} color="white" />
       )}
 
+      {/* Import/Export floating buttons on left */}
+      {user?.role === 'admin' && (
+        <>
+          <FAB icon="file-import" style={styles.leftFabTop} onPress={() => setShowImportDialog(true)} onLongPress={() => { setTooltip({ visible: true, text: 'Importa CSV', bottom: 88 }); setTimeout(() => setTooltip({ visible: false, text: '', bottom: 0 }), 1400); }} color="#fff" />
+          <FAB icon="file-export" style={styles.leftFabBottom} onPress={async () => {
+            setShowExportDialog(true);
+            setExportCsv('');
+            setExporting(true);
+            try {
+              const res = await fetch(`${API_URL}/products/export`, { headers: { Authorization: `Bearer ${token}` } });
+              if (res.ok) {
+                const text = await res.text();
+                setExportCsv(text);
+              } else {
+                const err = await res.json();
+                showToast(err.error || 'Errore export', 'error');
+                setShowExportDialog(false);
+              }
+            } catch (err) { console.error('Export error', err); showToast('Errore server', 'error'); setShowExportDialog(false); }
+            setExporting(false);
+          }} onLongPress={() => { setTooltip({ visible: true, text: 'Esporta CSV', bottom: 20 }); setTimeout(() => setTooltip({ visible: false, text: '', bottom: 0 }), 1400); }} color="#fff" />
+        </>
+      )}
+
       <Portal>
+        <Dialog visible={showImportDialog} onDismiss={() => setShowImportDialog(false)} style={styles.dialog}>
+          <Dialog.Title>Importa CSV prodotti</Dialog.Title>
+          <Dialog.Content>
+            <Text style={{ marginBottom: 8 }}>Seleziona un file .csv. Intestazione richiesta: <Text style={{ fontWeight: '700' }}>sku,name,description,price,stock,category</Text></Text>
+            <Text style={{ marginBottom: 8, color:'#666' }}>Il file importerà solo nuovi prodotti (skus già presenti verranno saltati). I campi price e stock devono essere numerici.</Text>
+            <Button mode="outlined" icon="file-upload" onPress={async () => {
+              try {
+                const res = await DocumentPicker.getDocumentAsync({ type: 'text/csv' });
+                if (res.type === 'success') {
+                  // upload file
+                  setImporting(true);
+                  const uri = res.uri;
+                  const fileName = res.name || 'products.csv';
+                  const formData = new FormData();
+                  formData.append('file', { uri, name: fileName, type: 'text/csv' });
+                  try {
+                    const uploadRes = await fetch(`${API_URL}/products/import`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+                    const data = await uploadRes.json();
+                    if (uploadRes.ok) {
+                      setImportReport(data);
+                      fetchProducts();
+                      showToast('Import completato', 'success');
+                    } else {
+                      setImportReport(data);
+                      showToast(data.error || 'Errore import', 'error');
+                    }
+                  } catch (uerr) { console.error('Upload error', uerr); showToast('Errore upload', 'error'); }
+                  setImporting(false);
+                }
+              } catch (err) { console.error('Picker error', err); showToast('Errore selezione file', 'error'); setImporting(false); }
+            }}>Seleziona file CSV</Button>
+            {importing && <ActivityIndicator animating={true} />}
+            {importReport && (
+              <View style={{ marginTop:8 }}>
+                <Text>Creati: {importReport.created}</Text>
+                <Text>Saltati: {importReport.skipped}</Text>
+                <Text>Errors: {importReport.errors?.length || 0}</Text>
+              </View>
+            )}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => { setShowImportDialog(false); setCsvText(''); setImportReport(null); }}>Chiudi</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={showExportDialog} onDismiss={() => setShowExportDialog(false)} style={styles.dialog}>
+          <Dialog.Title>Export CSV prodotti</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="CSV"
+              value={exportCsv}
+              onChangeText={setExportCsv}
+              multiline
+              numberOfLines={8}
+              style={{ backgroundColor: '#fff', marginBottom: 8 }}
+              editable={false}
+            />
+            {exporting && <Text>Preparazione CSV...</Text>}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowExportDialog(false)}>Chiudi</Button>
+            <Button onPress={async () => {
+              try {
+                setDownloading(true);
+                const fileUri = FileSystem.documentDirectory + `products_export_${Date.now()}.csv`;
+                try {
+                  // write without encoding to avoid compatibility issues
+                  await FileSystem.writeAsStringAsync(fileUri, exportCsv);
+                } catch (writeErr) {
+                  console.warn('writeAsStringAsync failed', writeErr);
+                  throw writeErr;
+                }
+
+                const sharingAvailable = await Sharing.isAvailableAsync();
+                if (sharingAvailable) {
+                  await Sharing.shareAsync(fileUri, { mimeType: 'text/csv' });
+                } else {
+                  // fallback: share text via React Native Share
+                  await Share.share({ title: 'products.csv', message: exportCsv });
+                }
+
+                setDownloading(false);
+              } catch (err) { console.error('Share error', err); setDownloading(false); showToast('Errore condivisione/salvataggio', 'error'); }
+            }}>{downloading ? 'Salvando...' : 'Scarica / Condividi'}</Button>
+          </Dialog.Actions>
+        </Dialog>
+
         <Dialog visible={showDialog} onDismiss={() => setShowDialog(false)} style={styles.dialog}>
           <Dialog.Title>{editing ? 'Modifica prodotto' : 'Nuovo prodotto'}</Dialog.Title>
           <Dialog.Content>
@@ -151,6 +276,11 @@ export default function ProductsScreen() {
       </Portal>
 
       <FloatingToast visible={toastVisible} message={toastMsg} type={toastType} onHide={() => setToastVisible(false)} />
+      {tooltip.visible && (
+        <View pointerEvents="none" style={[styles.tooltip, { bottom: tooltip.bottom }]}> 
+          <Text style={styles.tooltipText}>{tooltip.text}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -158,7 +288,12 @@ export default function ProductsScreen() {
 const styles = StyleSheet.create({
   card: { marginBottom:12, borderRadius:12, backgroundColor:'#fff' },
   name: { fontSize:18, fontWeight:'600', marginBottom:6 },
-  fab: { position:'absolute', right:20, bottom:20, backgroundColor:'#7E57C2' },
+  fab: { position:'absolute', right:20, bottom:20, backgroundColor:'#7E57C2', zIndex: 10, elevation: 6 },
+  leftFabTop: { position: 'absolute', left: 20, bottom: 100, backgroundColor: '#6C5CE7', zIndex: 10, elevation: 6 },
+  leftFabBottom: { position: 'absolute', left: 20, bottom: 20, backgroundColor: '#4CAF50', zIndex: 10, elevation: 6 },
+  topActionsContainer: { paddingHorizontal: 16, paddingTop: 8 },
+  tooltip: { position: 'absolute', left: 90, backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 10, paddingVertical:6, borderRadius:8 },
+  tooltipText: { color:'#fff' },
   input: { marginBottom:10 },
   dialog: { borderRadius:12, backgroundColor:'#fff' }
 });

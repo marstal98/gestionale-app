@@ -10,10 +10,11 @@ const prisma = new PrismaClient();
 router.get("/", authenticateToken, authorizeRole("admin"), async (req, res) => {
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, createdAt: true, isActive: true }
     });
     res.json(users);
   } catch (err) {
+    console.error('GET /api/users error:', err);
     res.status(500).json({ error: "Errore server" });
   }
 });
@@ -27,7 +28,9 @@ router.post("/", authenticateToken, authorizeRole("admin"), async (req, res) => 
     const newUser = await prisma.user.create({
       data: { name, email, password: hashedPassword, role }
     });
-    res.json(newUser);
+    // do not return password hash
+    const safe = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt, isActive: newUser.isActive };
+    res.json(safe);
   } catch (err) {
     res.status(500).json({ error: "Errore creazione utente" });
   }
@@ -50,7 +53,8 @@ router.put("/:id", authenticateToken, authorizeRole("admin"), async (req, res) =
       data: updateData
     });
 
-    res.json(updatedUser);
+    const safe = { id: updatedUser.id, name: updatedUser.name, email: updatedUser.email, role: updatedUser.role, createdAt: updatedUser.createdAt, isActive: updatedUser.isActive };
+    res.json(safe);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Errore aggiornamento utente" });
@@ -69,6 +73,20 @@ router.delete("/:id", authenticateToken, authorizeRole("admin"), async (req, res
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Errore eliminazione utente" });
+  }
+});
+
+// PUT: toggle isActive (enable/disable user)
+router.put("/:id/activate", authenticateToken, authorizeRole("admin"), async (req, res) => {
+  const { id } = req.params;
+  const { isActive } = req.body;
+  try {
+    const updated = await prisma.user.update({ where: { id: parseInt(id) }, data: { isActive: Boolean(isActive) } });
+    const safe = { id: updated.id, name: updated.name, email: updated.email, role: updated.role, createdAt: updated.createdAt, isActive: updated.isActive };
+    res.json(safe);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Errore aggiornamento stato utente' });
   }
 });
 

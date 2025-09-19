@@ -20,6 +20,7 @@ export default function UsersScreen() {
     const { token, user: authUser } = useContext(AuthContext);
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [search, setSearch] = useState('');
 
     // Stato per dialog
     const [showDialog, setShowDialog] = useState(false);
@@ -70,6 +71,37 @@ export default function UsersScreen() {
     useEffect(() => {
         fetchUsers();
     }, []);
+
+    // filtered users according to search
+    const filteredUsers = users.filter(u => {
+        if (!search) return true;
+        const s = search.toLowerCase();
+        return (u.name || '').toLowerCase().includes(s) || (u.email || '').toLowerCase().includes(s) || (u.role || '').toLowerCase().includes(s);
+    });
+
+    const confirmToggleActive = (u) => {
+        // Prevent admin disabling themselves
+        if (authUser && u.id === authUser.id) {
+            showToast("Non puoi modificare lo stato del tuo utente", 'error');
+            return;
+        }
+        setEditingUser(u);
+        setShowDialog(true);
+        // reuse dialog for editing but we will show a confirm below
+        setName(u.name); setEmail(u.email); setRole(u.role);
+    };
+
+    const handleToggleActive = async (u) => {
+        try {
+            const res = await fetch(`${API_URL}/users/${u.id}/activate`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ isActive: !u.isActive })
+            });
+            if (res.ok) { fetchUsers(); showToast(!u.isActive ? 'Utente riattivato' : 'Utente disattivato', 'success'); }
+            else { const e = await res.json(); showToast(e.error || 'Errore', 'error'); }
+        } catch (err) { console.error(err); showToast('Errore server', 'error'); }
+    };
 
     // Creazione o modifica
     const handleSave = async () => {
@@ -204,8 +236,15 @@ export default function UsersScreen() {
                 barStyle="dark-content"       // testo scuro (icone nere)
                 translucent                   // fa "scorrere" il contenuto sotto la status bar
             />
+            <TextInput
+                label="Cerca utenti (nome, email, ruolo)"
+                value={search}
+                onChangeText={setSearch}
+                style={{ margin: 16 }}
+            />
+
             <FlatList
-                data={users}
+                data={filteredUsers}
                 keyExtractor={(item) => item.id.toString()}
                 contentContainerStyle={styles.list}
                 renderItem={({ item }) => (
@@ -215,6 +254,7 @@ export default function UsersScreen() {
                             <Text>Email: {item.email}</Text>
                             <Text>Ruolo: {item.role}</Text>
                             <Text>Creato: {new Date(item.createdAt).toLocaleDateString()}</Text>
+                            <Text>Stato: {item.isActive ? 'Attivo' : 'Disabilitato'}</Text>
                         </Card.Content>
                         <Card.Actions style={styles.actions}>
                             <Button
@@ -232,6 +272,14 @@ export default function UsersScreen() {
                                 textColor="red"
                             >
                                 Elimina
+                            </Button>
+                            <Button
+                                mode="text"
+                                onPress={() => handleToggleActive(item)}
+                                icon={item.isActive ? 'account-cancel' : 'account-check'}
+                                textColor={item.isActive ? 'orange' : '#4CAF50'}
+                            >
+                                {item.isActive ? 'Disabilita' : 'Abilita'}
                             </Button>
                         </Card.Actions>
                     </Card>
