@@ -44,7 +44,7 @@ export default function FloatingToast({ visible, message, onHide, type = "succes
   // colori e emoji per tipo
   const typeMap = {
     success: { color: "#7E57C2", emoji: "✅" },
-    error: { color: "#E53935", emoji: "❌" },
+    error: { color: "#E53935", emoji: "⚠️" },
     info: { color: "#1E88E5", emoji: "ℹ️" },
   };
 

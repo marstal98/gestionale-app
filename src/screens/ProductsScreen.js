@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { View, StyleSheet, FlatList, StatusBar, Share } from 'react-native';
-import { Text, Card, Button, FAB, Dialog, Portal, TextInput, ActivityIndicator } from 'react-native-paper';
+import { Text, Card, Button, FAB, Dialog, Portal, TextInput, ActivityIndicator, IconButton } from 'react-native-paper';
 import { AuthContext } from '../context/AuthContext';
+import SearchInput from '../components/SearchInput';
 import { API_URL } from '../config';
 import FloatingToast from '../components/FloatingToast';
 import * as DocumentPicker from 'expo-document-picker';
@@ -12,6 +13,7 @@ export default function ProductsScreen() {
   const { token, user } = useContext(AuthContext);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
 
   const [showDialog, setShowDialog] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -34,6 +36,7 @@ export default function ProductsScreen() {
   const [exporting, setExporting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [tooltip, setTooltip] = useState({ visible: false, text: '', bottom: 0 });
+ 
 
   const showToast = (msg, type = 'success') => {
     setToastMsg(msg);
@@ -53,7 +56,13 @@ export default function ProductsScreen() {
     }
   };
 
-  useEffect(() => { fetchProducts(); }, []);
+  useEffect(() => { if (token) fetchProducts(); }, [token]);
+
+  const filteredProducts = products.filter(p => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (p.name || '').toLowerCase().includes(s) || (p.sku || '').toLowerCase().includes(s) || String(p.id).includes(s);
+  });
 
   const openDialog = (p = null) => {
     if (p) {
@@ -109,8 +118,12 @@ export default function ProductsScreen() {
       <StatusBar backgroundColor="transparent" barStyle="dark-content" translucent />
       {/* left floating import/export FABs will be rendered below */}
 
+      <View style={{ paddingHorizontal: 16 }}>
+          <SearchInput placeholder="Cerca prodotti (nome, codice)" value={search} onChangeText={setSearch} />
+      </View>
+
       <FlatList
-        data={products}
+        data={filteredProducts}
         keyExtractor={i => i.id.toString()}
         contentContainerStyle={{ padding:16, paddingTop: 16 }}
         renderItem={({item}) => (
@@ -262,6 +275,8 @@ export default function ProductsScreen() {
         </Dialog>
       </Portal>
 
+      
+
       <Portal>
         <Dialog visible={showConfirmDelete} onDismiss={() => setShowConfirmDelete(false)} style={styles.dialog}>
           <Dialog.Title>Conferma</Dialog.Title>
@@ -296,4 +311,6 @@ const styles = StyleSheet.create({
   tooltipText: { color:'#fff' },
   input: { marginBottom:10 },
   dialog: { borderRadius:12, backgroundColor:'#fff' }
+  ,
+  // legacy search styles removed; use src/components/SearchInput instead
 });

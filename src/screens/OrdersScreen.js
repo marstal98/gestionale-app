@@ -1,14 +1,17 @@
 import React, { useContext, useEffect, useState } from "react";
+import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, FlatList, StatusBar } from "react-native";
-import { Text, Card, Button, Portal, Dialog, TextInput } from "react-native-paper";
+import { Text, Card, Button, Portal, Dialog, TextInput, FAB, IconButton } from "react-native-paper";
+import SearchInput from '../components/SearchInput';
 import { AuthContext } from "../context/AuthContext";
 import { API_URL } from "../config";
 
-export default function OrdersScreen() {
+export default function OrdersScreen({ navigation }) {
   const { token, user } = useContext(AuthContext);
   const [orders, setOrders] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
 
   // order form
   const [showDialog, setShowDialog] = useState(false);
@@ -30,7 +33,22 @@ export default function OrdersScreen() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { if (token) fetchData(); }, [token]);
+
+  const filteredOrders = orders.filter(o => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return String(o.id).includes(s) || (o.customerName || '').toLowerCase().includes(s) || (o.status || '').toLowerCase().includes(s);
+  });
+
+  // refetch on navigation params change (used after creating an order)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      // if route params contain refreshToken or simply on focus, fetch
+      fetchData();
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   const toggleSelectProduct = (prod) => {
     const existing = selectedItems.find(i => i.productId === prod.id);
@@ -56,28 +74,38 @@ export default function OrdersScreen() {
     } catch (err) { console.error(err); }
   };
 
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchData();
+    }, [])
+  );
+
   return (
-    <View style={[styles.container, { paddingTop: 50 }]}>
+  <View style={[styles.container, { paddingTop: 48 }]}>
       <StatusBar backgroundColor="transparent" barStyle="dark-content" translucent />
-      <Text style={styles.title}>Gestione Ordini 📦</Text>
+
+      <View style={{ paddingHorizontal: 16 }}>
+        <SearchInput placeholder="Cerca ordini (numero, cliente, stato)" value={search} onChangeText={setSearch} />
+      </View>
 
       <FlatList
-        data={orders}
+        data={filteredOrders}
         keyExtractor={o => o.id.toString()}
         contentContainerStyle={{ padding: 16, paddingTop: 8 }}
         renderItem={({item}) => (
           <Card style={{ marginBottom: 12 }} onPress={() => { setSelectedOrder(item); setShowDialog(true); }}>
             <Card.Content>
               <Text>#{item.id} - {item.status}</Text>
-              <Text>Totale: €{item.total}</Text>
+              <Text>Totale: €{Number(item.total).toFixed(2)}</Text>
               <Text>Cliente: {item.customerName || item.user?.name || item.user?.email || '—'}</Text>
             </Card.Content>
           </Card>
         )}
       />
 
-      {user?.role === 'customer' && (
-        <Button mode="contained" onPress={() => setShowDialog(true)} style={{ margin: 16 }}>Nuovo ordine</Button>
+      {/* Floating New Order FAB for allowed roles */}
+      {(user?.role === 'customer' || user?.role === 'admin') && (
+        <FAB icon="plus" style={styles.fabOrder} onPress={() => navigation?.getParent ? navigation.getParent().navigate('NewOrder') : null} color="white" />
       )}
 
       <Portal>
@@ -144,7 +172,7 @@ export default function OrdersScreen() {
                     </View>
                   );
                 })}
-                <Text style={{ marginTop: 8, fontWeight: '700' }}>Totale ordine: €{selectedOrder.total}</Text>
+                <Text style={{ marginTop: 8, fontWeight: '700' }}>Totale ordine: €{Number(selectedOrder.total).toFixed(2)}</Text>
                 {selectedOrder.notes ? <Text style={{ marginTop: 8 }}>Note: {selectedOrder.notes}</Text> : null}
               </>
             ) : null}
@@ -160,5 +188,8 @@ export default function OrdersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex:1, backgroundColor:'#F9F9FB' },
-  title: { fontSize:22, fontWeight:'600', margin:16 }
+  title: { fontSize:22, fontWeight:'600', margin:16 },
+  fabOrder: { position: 'absolute', right: 20, bottom: 20, backgroundColor: '#7E57C2', zIndex: 10, elevation: 6 }
+  ,
+  // legacy search styles removed; use src/components/SearchInput instead
 });

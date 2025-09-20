@@ -90,9 +90,15 @@ function RootNavigator() {
     );
   }
 
-  if (user.role === "admin") return <AdminTabs />;
-  if (user.role === "employee") return <EmployeeTabs />;
-  return <CustomerTabs />;
+  // Wrap tabs in a stack so we can push modal screens like NewOrder
+  const Tabs = user.role === 'admin' ? AdminTabs : user.role === 'employee' ? EmployeeTabs : CustomerTabs;
+
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name="MainTabs" component={Tabs} options={{ headerShown: false }} />
+      <Stack.Screen name="NewOrder" component={require('./src/screens/NewOrderScreen').default} options={{ title: 'Nuovo ordine' }} />
+    </Stack.Navigator>
+  );
 }
 
 export default function App() {

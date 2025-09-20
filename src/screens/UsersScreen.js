@@ -8,7 +8,9 @@ import {
     Portal,
     TextInput,
     FAB,
+    IconButton,
 } from "react-native-paper";
+import SearchInput from '../components/SearchInput';
 import { AuthContext } from "../context/AuthContext";
 import { API_URL } from "../config";
 import { StatusBar } from "react-native";
@@ -69,8 +71,8 @@ export default function UsersScreen() {
     };
 
     useEffect(() => {
-        fetchUsers();
-    }, []);
+        if (token) fetchUsers();
+    }, [token]);
 
     // filtered users according to search
     const filteredUsers = users.filter(u => {
@@ -236,12 +238,8 @@ export default function UsersScreen() {
                 barStyle="dark-content"       // testo scuro (icone nere)
                 translucent                   // fa "scorrere" il contenuto sotto la status bar
             />
-            <TextInput
-                label="Cerca utenti (nome, email, ruolo)"
-                value={search}
-                onChangeText={setSearch}
-                style={{ margin: 16 }}
-            />
+            {/* unified search input */}
+            <SearchInput placeholder="Cerca utenti (nome, email, ruolo)" value={search} onChangeText={setSearch} />
 
             <FlatList
                 data={filteredUsers}
@@ -383,4 +381,5 @@ const styles = StyleSheet.create({
     },
     input: { marginBottom: 10 },
     dialog: { borderRadius: 12, backgroundColor: "#ffffff" },
+    // legacy search styles removed; use src/components/SearchInput instead
 });
