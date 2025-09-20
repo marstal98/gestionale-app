@@ -23,6 +23,21 @@ async function main() {
     create: { name: 'Customer User', email: 'customer@test.com', password: passwordHash, role: 'customer' }
   });
 
+  // additional sample customers
+  const sampleCustomers = [
+    { name: 'Luca Rossi', email: 'luca.rossi@test.com' },
+    { name: 'Giulia Bianchi', email: 'giulia.bianchi@test.com' },
+    { name: 'Marco Verdi', email: 'marco.verdi@test.com' }
+  ];
+
+  for (const c of sampleCustomers) {
+    await prisma.user.upsert({
+      where: { email: c.email },
+      update: {},
+      create: { name: c.name, email: c.email, password: passwordHash, role: 'customer' }
+    });
+  }
+
   // seed prodotti
   await prisma.product.upsert({
     where: { sku: 'A-100' },
@@ -43,7 +58,8 @@ async function main() {
   if (customer && prodA && prodB) {
     const order = await prisma.order.create({
       data: {
-        userId: customer.id,
+        customerId: customer.id,
+        createdById: customer.id,
         total: 29.98,
         status: 'completed',
         items: {

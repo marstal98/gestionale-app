@@ -2,15 +2,15 @@ import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { TextInput, IconButton } from 'react-native-paper';
 
-export default function SearchInput({ value, onChangeText, placeholder }) {
+export default function SearchInput({ value, onChangeText, placeholder, compact = false, style }) {
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, compact ? styles.wrapperCompact : null, style && style.container]}>
       <IconButton icon="magnify" size={20} style={styles.icon} />
       <TextInput
         placeholder={placeholder}
         value={value}
         onChangeText={onChangeText}
-        style={styles.input}
+        style={[styles.input, style && style.input]}
         underlineColor="transparent"
         mode="flat"
       />
@@ -36,6 +36,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 6,
     elevation: 2,
+  },
+  wrapperCompact: {
+    marginHorizontal: 0,
+    marginBottom: 0,
+    backgroundColor: 'transparent',
+    elevation: 0,
   },
   icon: { margin: 0, marginLeft: 6, color: '#666' },
   input: { flex: 1, backgroundColor: 'transparent', paddingVertical: 6 },

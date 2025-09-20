@@ -43,4 +43,26 @@ export function logAudit(action, subjectType, subjectId, actor = {}, details = {
   }
 }
 
-export default { logAudit };
+// lightweight application log: kept for compatibility with existing calls
+export function logApp(event, payload = {}, actor = {}) {
+  try {
+    const ts = new Date().toISOString();
+    const lines = [];
+    lines.push('=== APP LOG ===');
+    lines.push(`Timestamp: ${ts}`);
+    lines.push(`Evento: ${event}`);
+    if (actor && Object.keys(actor).length) {
+      lines.push(`Eseguito da: id=${actor.id || 'n/a'}${actor.email ? ` - ${actor.email}` : ''}`);
+    }
+    if (payload && Object.keys(payload).length) {
+      lines.push('Dati:');
+      lines.push(JSON.stringify(payload, null, 2));
+    }
+    lines.push('-------------------------------');
+    safeWrite(auditLogPath, lines.join('\n'));
+  } catch (e) {
+    console.error('Errore logApp', e);
+  }
+}
+
+export default { logAudit, logApp };

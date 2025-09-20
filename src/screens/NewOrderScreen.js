@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { View, FlatList, StyleSheet, Keyboard } from 'react-native';
+import { View, FlatList, StyleSheet, Keyboard, Pressable } from 'react-native';
 import { Text, TextInput, Button, Card, FAB, Portal, Modal, IconButton, Badge, Surface } from 'react-native-paper';
 import FloatingToast from '../components/FloatingToast';
 import SearchInput from '../components/SearchInput';
@@ -7,14 +7,20 @@ import { ScrollView, Dimensions } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
 import { SyncContext } from '../context/SyncContext';
 import { API_URL } from '../config';
+import AssigneePicker from '../components/AssigneePicker';
 
 export default function NewOrderScreen({ navigation }) {
-  const { token } = useContext(AuthContext);
+  const { token, user } = useContext(AuthContext);
   const { triggerRefresh } = useContext(SyncContext);
   const [products, setProducts] = useState([]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState([]); // { productId, quantity }
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState([]);
+  const [customerId, setCustomerId] = useState(null);
+  const [assignedToId, setAssignedToId] = useState(null);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [customerPickerVisible, setCustomerPickerVisible] = useState(false);
 
   const fetchProducts = async () => {
     try {
@@ -25,7 +31,18 @@ export default function NewOrderScreen({ navigation }) {
     finally { setLoading(false); }
   };
 
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch(`${API_URL}/users`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data);
+      }
+    } catch (e) { console.error('fetch users', e); }
+  };
+
   useEffect(() => { if (token) fetchProducts(); }, [token]);
+  useEffect(() => { if (token) fetchUsers(); }, [token]);
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || (p.sku || '').toLowerCase().includes(query.toLowerCase()));
 
@@ -55,7 +72,10 @@ export default function NewOrderScreen({ navigation }) {
     const items = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0 })).filter(i => i.quantity > 0);
     if (items.length === 0) { setToast({ visible: true, message: 'Carrello vuoto o quantità non valide', type: 'error' }); return; }
     try {
-      const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ items }) });
+  const payload = { items };
+  if (user?.role === 'admin' && assignedToId) payload.assignedToId = assignedToId;
+  if (user?.role === 'admin' && customerId) payload.customerId = customerId;
+  const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (res.ok) {
         // show success toast then navigate back so user sees the confirmation
@@ -173,6 +193,56 @@ export default function NewOrderScreen({ navigation }) {
             </ScrollView>
             <View style={{ marginTop: 12 }}>
               <Text style={{ marginBottom: 8, fontWeight: '700' }}>Totale: €{total.toFixed(2)}</Text>
+              {/* Assignee selector */}
+              <View style={{ marginBottom: 8 }}>
+                <Text style={{ fontWeight: '700', marginBottom: 6 }}>Cliente:</Text>
+                {user?.role === 'admin' ? (
+                  <>
+                    <Pressable onPress={() => { if (users.length) setCustomerPickerVisible(true); }}>
+                      <TextInput
+                        label="Cliente"
+                        value={(() => {
+                          const u = users.find(x => x.id === customerId);
+                          return u ? `${u.name} (${u.email})` : '';
+                        })()}
+                        editable={false}
+                        pointerEvents="none"
+                      />
+                    </Pressable>
+                    <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere il cliente (opzionale)</Text>
+                    <AssigneePicker visible={customerPickerVisible} onDismiss={() => setCustomerPickerVisible(false)} users={users} onSelect={(u) => setCustomerId(u.id)} roleFilter={'customer'} title={'Seleziona cliente'} />
+                  </>
+                ) : (
+                  <TextInput label="Cliente" value={user?.name || ''} editable={false} />
+                )}
+
+                <View style={{ height: 12 }} />
+
+                <Text style={{ fontWeight: '700', marginBottom: 6 }}>Assegna a:</Text>
+                {/* simple select: only admin can choose an assignee; others will be assigned to themselves */}
+                {user?.role === 'admin' ? (
+                  <>
+                    <Pressable onPress={() => { if (users.length) setPickerVisible(true); }}>
+                      <TextInput
+                        label="Assegnato a"
+                        value={(() => {
+                          const u = users.find(x => x.id === assignedToId);
+                          return u ? `${u.name} (${u.email})` : '';
+                        })()}
+                        editable={false}
+                        pointerEvents="none"
+                      />
+                    </Pressable>
+                    <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere un assegnatario</Text>
+                    <AssigneePicker visible={pickerVisible} onDismiss={() => setPickerVisible(false)} users={users} onSelect={(u) => setAssignedToId(u.id)} roleFilter={['employee','admin']} title={'Seleziona assegnatario'} />
+                  </>
+                ) : (
+                  <>
+                    <TextInput label="Assegnato a" value={user?.name || ''} editable={false} />
+                    <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>L'ordine sarà assegnato a te</Text>
+                  </>
+                )}
+              </View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                 <Button mode="outlined" onPress={() => { setCart([]); Keyboard.dismiss(); }}>Svuota</Button>
                 <Button mode="contained" onPress={() => { submitOrder(); setCartExpanded(false); }} disabled={cart.length === 0}>Crea ordine</Button>

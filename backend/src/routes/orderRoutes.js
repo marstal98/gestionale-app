@@ -11,10 +11,17 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const user = req.user; // { id, role }
     if (user.role === 'admin') {
-      const orders = await prisma.order.findMany({ include: { items: true } });
+      // admin: return all orders and include customer/assignee/creator
+      const orders = await prisma.order.findMany({ include: { items: true, assignedTo: true, customer: true, createdBy: true } });
       return res.json(orders);
     }
-    const orders = await prisma.order.findMany({ where: { userId: user.id }, include: { items: true } });
+    // employee: show orders assigned to them
+    if (user.role === 'employee') {
+      const orders = await prisma.order.findMany({ where: { assignedToId: user.id }, include: { items: true, assignedTo: true, customer: true, createdBy: true } });
+      return res.json(orders);
+    }
+    // customer: show orders where they are the customer
+    const orders = await prisma.order.findMany({ where: { customerId: user.id }, include: { items: true, assignedTo: true, customer: true, createdBy: true } });
     res.json(orders);
   } catch (err) {
     console.error(err);
@@ -25,7 +32,7 @@ router.get('/', authenticateToken, async (req, res) => {
 // POST /api/orders - create order for authenticated user
 router.post('/', authenticateToken, async (req, res) => {
   const user = req.user;
-  const { items } = req.body; // [{ productId, quantity }]
+  const { items, assignedToId, customerId } = req.body; // [{ productId, quantity }]
 
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Items mancanti' });
 
@@ -71,15 +78,29 @@ router.post('/', authenticateToken, async (req, res) => {
 
       const createItems = items.map(i => ({ productId: i.productId, quantity: parseInt(i.quantity || 0), unitPrice: txProductsMap[i.productId].price }));
 
-      const order = await prismaTx.order.create({
-        data: {
-          userId: user.id,
-          total,
-          status: 'pending',
-          items: { create: createItems }
-        },
-        include: { items: true }
-      });
+      const orderData = {
+        // set creator of the order
+        createdById: user.id,
+        // default customer: if admin provided a customerId use it, otherwise the creator is the customer
+        customerId: user.role === 'admin' && customerId ? parseInt(customerId) : user.id,
+        total,
+        status: 'pending',
+        items: { create: createItems }
+      };
+
+      // optional assignee: only admin can assign during creation
+      if (assignedToId) {
+        if (user.role !== 'admin') {
+          throw { status: 403, message: 'Solo admin può assegnare ordini' };
+        }
+        // verify assignee exists and has allowed role
+        const assignee = await prismaTx.user.findUnique({ where: { id: parseInt(assignedToId) } });
+        if (!assignee) throw { status: 400, message: 'Utente assegnato non trovato' };
+        if (!['employee','admin'].includes(String(assignee.role))) throw { status: 400, message: 'Assegnatario deve essere un dipendente (employee) o admin' };
+        orderData.assignedToId = parseInt(assignedToId);
+      }
+
+      const order = await prismaTx.order.create({ data: orderData, include: { items: true } });
 
       // Record inventory reservations for each order item
       for (const it of order.items) {
@@ -105,7 +126,7 @@ router.post('/', authenticateToken, async (req, res) => {
       console.warn('Could not read post-tx product stock', e);
     }
 
-    try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
+  try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length, assignedToId: result.assignedToId || null, customerId: result.customerId || null }); } catch (e) { console.error('Audit log error', e); }
     logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
     res.status(201).json(result);
   } catch (err) {
@@ -122,10 +143,10 @@ router.post('/:id/cancel', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const user = req.user;
   try {
-    const order = await prisma.order.findUnique({ where: { id: parseInt(id) }, include: { items: true } });
+  const order = await prisma.order.findUnique({ where: { id: parseInt(id) }, include: { items: true } });
     if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
-    // Only admin or order owner can cancel
-    if (user.role !== 'admin' && user.id !== order.userId) return res.status(403).json({ error: 'Accesso negato' });
+  // Only admin or order owner (creator or customer) can cancel
+  if (user.role !== 'admin' && user.id !== order.createdById && user.id !== order.customerId) return res.status(403).json({ error: 'Accesso negato' });
     if (order.status === 'cancelled') return res.status(400).json({ error: 'Ordine già cancellato' });
 
     // Release stock in a transaction and log movements
@@ -143,5 +164,37 @@ router.post('/:id/cancel', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Cancel order error', err);
     res.status(500).json({ error: 'Errore cancellazione ordine' });
+  }
+});
+
+// PUT /api/orders/:id/assign - change the assignee of an order
+router.put('/:id/assign', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { assignedToId } = req.body;
+  const user = req.user;
+
+  try {
+  const order = await prisma.order.findUnique({ where: { id: parseInt(id) } });
+    if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
+
+  // Only admin can reassign
+  if (user.role !== 'admin') return res.status(403).json({ error: 'Solo admin può riassegnare ordini' });
+
+    // verify assignee exists if provided
+    if (assignedToId) {
+      const assignee = await prisma.user.findUnique({ where: { id: parseInt(assignedToId) } });
+      if (!assignee) return res.status(400).json({ error: 'Utente assegnato non trovato' });
+      if (!['employee','admin'].includes(String(assignee.role))) return res.status(400).json({ error: 'Assegnatario deve essere un dipendente (employee) o admin' });
+    }
+
+    const updated = await prisma.order.update({ where: { id: order.id }, data: { assignedToId: assignedToId ? parseInt(assignedToId) : null } });
+
+    try { logAudit('assign', 'order', updated.id, req.user || {}, { assignedToId: updated.assignedToId || null }); } catch (e) { console.error('Audit log error', e); }
+    logApp('order.assign', { orderId: updated.id, by: req.user?.id || null, assignedToId: updated.assignedToId || null });
+
+    res.json({ ok: true, assignedToId: updated.assignedToId || null });
+  } catch (err) {
+    console.error('Assign order error', err);
+    res.status(500).json({ error: 'Errore assegnazione ordine' });
   }
 });

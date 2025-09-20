@@ -3,15 +3,18 @@ import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, FlatList, StatusBar } from "react-native";
 import { Text, Card, Button, Portal, Dialog, TextInput, FAB, IconButton } from "react-native-paper";
 import SearchInput from '../components/SearchInput';
+import AssigneePicker from '../components/AssigneePicker';
 import { AuthContext } from "../context/AuthContext";
 import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
 
 export default function OrdersScreen({ navigation }) {
   const { token, user } = useContext(AuthContext);
-  const { triggerRefresh } = useContext(SyncContext);
+  const { triggerRefresh, refreshKey } = useContext(SyncContext);
   const [orders, setOrders] = useState([]);
   const [products, setProducts] = useState([]);
+  const [usersList, setUsersList] = useState([]);
+  const [pickerVisible, setPickerVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
@@ -30,17 +33,25 @@ export default function OrdersScreen({ navigation }) {
       const pData = await pRes.json();
       if (oRes.ok) setOrders(oData);
       if (pRes.ok) setProducts(pData);
+      // try fetch users (if admin)
+      try {
+        const uRes = await fetch(`${API_URL}/users`, { headers: { Authorization: `Bearer ${token}` } });
+        if (uRes.ok) {
+          const uData = await uRes.json();
+          setUsersList(uData);
+        }
+      } catch (e) { /* ignore */ }
     } catch (err) {
       console.error('Errore fetch orders/products', err);
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { if (token) fetchData(); }, [token]);
+  useEffect(() => { if (token) fetchData(); }, [token, refreshKey]);
 
   const filteredOrders = orders.filter(o => {
     if (!search) return true;
     const s = search.toLowerCase();
-    return String(o.id).includes(s) || (o.customerName || '').toLowerCase().includes(s) || (o.status || '').toLowerCase().includes(s);
+    return String(o.id).includes(s) || (o.customer?.name || o.customer?.email || '').toLowerCase().includes(s) || (o.status || '').toLowerCase().includes(s);
   });
 
   // refetch on navigation params change (used after creating an order)
@@ -78,8 +89,13 @@ export default function OrdersScreen({ navigation }) {
 
   useFocusEffect(
     React.useCallback(() => {
+      let mounted = true;
       fetchData();
-    }, [])
+      const iv = setInterval(() => {
+        if (mounted) fetchData();
+      }, 5000);
+      return () => { mounted = false; clearInterval(iv); };
+    }, [token, refreshKey])
   );
 
   return (
@@ -99,7 +115,8 @@ export default function OrdersScreen({ navigation }) {
             <Card.Content>
               <Text>#{item.id} - {item.status}</Text>
               <Text>Totale: €{Number(item.total).toFixed(2)}</Text>
-              <Text>Cliente: {item.customerName || item.user?.name || item.user?.email || '—'}</Text>
+              <Text>Cliente: {item.customer?.name || item.customer?.email || 'Cliente non assegnato'}</Text>
+              <Text>Assegnatario: {item.assignedTo ? (item.assignedTo.name || item.assignedTo.email) : 'Non assegnato'}</Text>
             </Card.Content>
           </Card>
         )}
@@ -163,7 +180,7 @@ export default function OrdersScreen({ navigation }) {
             {selectedOrder ? (
               <>
                 <Text>Status: {selectedOrder.status}</Text>
-                <Text>Cliente: {selectedOrder.customerName || selectedOrder.user?.name || selectedOrder.user?.email || '—'}</Text>
+                <Text>Cliente: {selectedOrder.customer?.name || selectedOrder.customer?.email || '—'}</Text>
                 <Text>Creato: {new Date(selectedOrder.createdAt).toLocaleString()}</Text>
                 <Text style={{ marginTop: 8, fontWeight: '700' }}>Articoli:</Text>
                 {selectedOrder.items && selectedOrder.items.map((it) => {
@@ -176,10 +193,29 @@ export default function OrdersScreen({ navigation }) {
                 })}
                 <Text style={{ marginTop: 8, fontWeight: '700' }}>Totale ordine: €{Number(selectedOrder.total).toFixed(2)}</Text>
                 {selectedOrder.notes ? <Text style={{ marginTop: 8 }}>Note: {selectedOrder.notes}</Text> : null}
+                <Text style={{ marginTop: 8 }}>Assegnato a: {selectedOrder.assignedTo ? (selectedOrder.assignedTo.name || selectedOrder.assignedTo.email) : '—'}</Text>
               </>
             ) : null}
           </Dialog.Content>
           <Dialog.Actions>
+            {/* Allow reassignment if admin or owner */}
+            {selectedOrder && (user?.role === 'admin') && usersList.length > 0 && (
+              <Button onPress={() => setPickerVisible(true)}>Cambia assegnatario</Button>
+            )}
+            <AssigneePicker visible={pickerVisible} onDismiss={() => setPickerVisible(false)} users={usersList} onSelect={async (next) => {
+              try {
+                const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ assignedToId: next.id }) });
+                if (res.ok) {
+                  selectedOrder.assignedTo = next;
+                  setSelectedOrder({ ...selectedOrder });
+                  fetchData();
+                  try { triggerRefresh(); } catch (e) { }
+                } else {
+                  const err = await res.json(); alert(err.error || 'Errore assegnazione');
+                }
+              } catch (e) { console.error(e); }
+              setPickerVisible(false);
+            }} roleFilter={['employee','admin']} title={'Seleziona assegnatario'} />
             <Button onPress={() => { setSelectedOrder(null); setShowDialog(false); }}>Chiudi</Button>
           </Dialog.Actions>
         </Dialog>
