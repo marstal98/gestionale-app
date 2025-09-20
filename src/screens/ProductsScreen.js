@@ -2,6 +2,7 @@ import React, { useEffect, useState, useContext } from 'react';
 import { View, StyleSheet, FlatList, StatusBar, Share } from 'react-native';
 import { Text, Card, Button, FAB, Dialog, Portal, TextInput, ActivityIndicator, IconButton } from 'react-native-paper';
 import { AuthContext } from '../context/AuthContext';
+import { SyncContext } from '../context/SyncContext';
 import SearchInput from '../components/SearchInput';
 import { API_URL } from '../config';
 import FloatingToast from '../components/FloatingToast';
@@ -11,6 +12,7 @@ import * as Sharing from 'expo-sharing';
 
 export default function ProductsScreen() {
   const { token, user } = useContext(AuthContext);
+  const { triggerRefresh } = useContext(SyncContext);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -27,6 +29,8 @@ export default function ProductsScreen() {
   const [toastType, setToastType] = useState('success');
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
+  const [forceDeleteCandidate, setForceDeleteCandidate] = useState(null);
+  const [showForceDeleteConfirm, setShowForceDeleteConfirm] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [importReport, setImportReport] = useState(null);
@@ -69,7 +73,7 @@ export default function ProductsScreen() {
       setEditing(p);
       setName(p.name || '');
       setSku(p.sku || '');
-      setPrice(String(p.price || ''));
+      setPrice((typeof p.price === 'number') ? p.price.toFixed(2) : String(p.price || ''));
       setStock(String(p.stock || ''));
     } else {
       setEditing(null);
@@ -78,15 +82,31 @@ export default function ProductsScreen() {
     setShowDialog(true);
   };
 
+  const handlePriceChange = (text) => {
+    // allow empty, or numeric with max 2 decimals
+    if (text === '') { setPrice(''); return; }
+    // replace comma with dot
+    const normalized = text.replace(',', '.');
+    // allow only digits and dot
+    if (!/^\d*\.?\d*$/.test(normalized)) return;
+    // limit to 2 decimals
+    const parts = normalized.split('.');
+    if (parts[1] && parts[1].length > 2) return;
+    setPrice(normalized);
+  };
+
   const handleSave = async () => {
     if (!name || !price) { showToast('Nome e prezzo obbligatori', 'error'); return; }
     try {
       const url = editing ? `${API_URL}/products/${editing.id}` : `${API_URL}/products`;
       const method = editing ? 'PUT' : 'POST';
-      const body = { name, sku, price: parseFloat(price), stock: parseInt(stock || 0) };
+      // enforce two decimals on price
+      const parsedPrice = isNaN(parseFloat(price)) ? 0 : Math.round(parseFloat(price) * 100) / 100;
+      const body = { name, sku, price: parsedPrice, stock: parseInt(stock || 0) };
       const res = await fetch(url, { method, headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       if (res.ok) {
         fetchProducts(); setShowDialog(false); showToast(editing ? 'Prodotto aggiornato' : 'Prodotto creato', 'success');
+        try { triggerRefresh(); } catch (e) { /* ignore */ }
       } else {
         const err = await res.json(); showToast(err.error || 'Errore', 'error');
       }
@@ -96,7 +116,7 @@ export default function ProductsScreen() {
   const handleDelete = async (p) => {
     try {
       const res = await fetch(`${API_URL}/products/${p.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) { fetchProducts(); showToast('Prodotto eliminato', 'success'); }
+  if (res.ok) { fetchProducts(); showToast('Prodotto eliminato', 'success'); try { triggerRefresh(); } catch (e) { } }
       else { const err = await res.json(); showToast(err.error || 'Errore', 'error'); }
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
   };
@@ -106,9 +126,34 @@ export default function ProductsScreen() {
     setShowConfirmDelete(true);
   };
 
+  const handleForceDelete = async () => {
+    if (!forceDeleteCandidate) return;
+    try {
+      const res = await fetch(`${API_URL}/products/${forceDeleteCandidate.id}?force=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+  if (res.ok) { fetchProducts(); showToast('Prodotto eliminato (forzato)', 'success'); try { triggerRefresh(); } catch (e) { } }
+      else { const err = await res.json(); showToast(err.error || 'Errore', 'error'); }
+    } catch (err) { console.error(err); showToast('Errore server', 'error'); }
+    setForceDeleteCandidate(null);
+    setShowForceDeleteConfirm(false);
+  };
+
   const handleConfirmDelete = async () => {
     if (!productToDelete) return;
-    await handleDelete(productToDelete);
+    try {
+      const res = await fetch(`${API_URL}/products/${productToDelete.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        fetchProducts(); showToast('Prodotto eliminato', 'success');
+      } else {
+        const data = await res.json();
+        // if deletion prevented due to references, offer force delete
+        if (data && data.error && data.error.toLowerCase().includes('impossibile eliminare')) {
+          setForceDeleteCandidate(productToDelete);
+          setShowForceDeleteConfirm(true);
+        } else {
+          showToast(data.error || 'Errore eliminazione', 'error');
+        }
+      }
+    } catch (err) { console.error(err); showToast('Errore server', 'error'); }
     setShowConfirmDelete(false);
     setProductToDelete(null);
   };
@@ -131,7 +176,7 @@ export default function ProductsScreen() {
             <Card.Content>
               <Text style={styles.name}>{item.name}</Text>
               <Text>SKU: {item.sku || '-'}</Text>
-              <Text>Prezzo: €{item.price}</Text>
+              <Text>Prezzo: €{(typeof item.price === 'number') ? item.price.toFixed(2) : item.price}</Text>
               <Text>Disponibilità: {item.stock}</Text>
             </Card.Content>
             {user?.role === 'admin' && (
@@ -195,6 +240,7 @@ export default function ProductsScreen() {
                       setImportReport(data);
                       fetchProducts();
                       showToast('Import completato', 'success');
+                      try { triggerRefresh(); } catch (e) { }
                     } else {
                       setImportReport(data);
                       showToast(data.error || 'Errore import', 'error');
@@ -265,7 +311,7 @@ export default function ProductsScreen() {
           <Dialog.Content>
             <TextInput label="Nome" value={name} onChangeText={setName} style={styles.input} />
             <TextInput label="SKU" value={sku} onChangeText={setSku} style={styles.input} />
-            <TextInput label="Prezzo" value={price} onChangeText={setPrice} keyboardType="numeric" style={styles.input} />
+            <TextInput label="Prezzo" value={price} onChangeText={handlePriceChange} keyboardType="numeric" style={styles.input} />
             <TextInput label="Stock" value={stock} onChangeText={setStock} keyboardType="numeric" style={styles.input} />
           </Dialog.Content>
           <Dialog.Actions>
@@ -286,6 +332,16 @@ export default function ProductsScreen() {
           <Dialog.Actions>
             <Button onPress={() => setShowConfirmDelete(false)}>Annulla</Button>
             <Button textColor="red" onPress={handleConfirmDelete}>Elimina</Button>
+          </Dialog.Actions>
+        </Dialog>
+        <Dialog visible={showForceDeleteConfirm} onDismiss={() => setShowForceDeleteConfirm(false)} style={styles.dialog}>
+          <Dialog.Title>Forza eliminazione</Dialog.Title>
+          <Dialog.Content>
+            <Text>Il prodotto "{forceDeleteCandidate?.name}" ha riferimenti in ordini o movimenti di inventario. Vuoi eliminarlo comunque rimuovendo anche i riferimenti?</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => { setShowForceDeleteConfirm(false); setForceDeleteCandidate(null); }}>Annulla</Button>
+            <Button textColor="red" onPress={handleForceDelete}>Elimina forzatamente</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

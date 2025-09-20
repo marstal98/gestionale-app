@@ -1,6 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, authorizeRole } from '../middleware/auth.js';
+import { logApp, logAudit } from '../utils/logger.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -44,7 +45,7 @@ router.post('/', authenticateToken, async (req, res) => {
       if (p.stock < qty) return res.status(409).json({ error: `Stock insufficiente per prodotto ${p.id}` });
     }
 
-    // All good — perform decrement and order creation in a transaction
+  // All good — perform decrement and order creation in a transaction
     const result = await prisma.$transaction(async (prismaTx) => {
       // Re-fetch products inside transaction for accurate unitPrice
       const txProducts = await prismaTx.product.findMany({ where: { id: { in: productIds } } });
@@ -84,6 +85,8 @@ router.post('/', authenticateToken, async (req, res) => {
       for (const it of order.items) {
         try {
           await prismaTx.inventoryMovement.create({ data: { productId: it.productId, type: 'reserve', quantity: it.quantity, metadata: { orderId: order.id } } });
+          try { logAudit('reserve', 'inventory', null, req.user || {}, { orderId: order.id, productId: it.productId, qty: it.quantity }); } catch (e) { console.error('Audit log error', e); }
+          logApp('inventory.reserve', { orderId: order.id, productId: it.productId, qty: it.quantity, by: req.user?.id || null });
         } catch (mvErr) {
           console.warn('Failed to record inventory movement for reservation', mvErr);
           // non-fatal: continue
@@ -102,6 +105,8 @@ router.post('/', authenticateToken, async (req, res) => {
       console.warn('Could not read post-tx product stock', e);
     }
 
+    try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
+    logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
     res.status(201).json(result);
   } catch (err) {
     console.error('Order creation error:', err);
@@ -132,6 +137,8 @@ router.post('/:id/cancel', authenticateToken, async (req, res) => {
       await prismaTx.order.update({ where: { id: order.id }, data: { status: 'cancelled' } });
     });
 
+    try { logAudit('cancel', 'order', order.id, req.user || {}, { cancelledBy: req.user?.id || null }); } catch (e) { console.error('Audit log error', e); }
+    logApp('order.cancel', { orderId: order.id, by: req.user?.id || null });
     res.json({ cancelled: true });
   } catch (err) {
     console.error('Cancel order error', err);

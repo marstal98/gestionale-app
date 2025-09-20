@@ -46,6 +46,10 @@ backend/dev.db
 backend/.env
 backend/.env.*
 
+# Logs (do not commit runtime logs)
+backend/logs/
+backend/backend/logs/
+
 # Backup folders we created
 backend.bak.*
 

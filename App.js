@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Provider as PaperProvider, DefaultTheme } from "react-native-paper";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { AuthProvider, AuthContext } from "./src/context/AuthContext";
+import { SyncProvider } from './src/context/SyncContext';
 import { StatusBar } from "react-native";
 import GlobalLoadingOverlay from "./src/components/GlobalLoadingOverlay";
 
@@ -104,6 +105,7 @@ function RootNavigator() {
 export default function App() {
   return (
     <AuthProvider>
+      <SyncProvider>
       <PaperProvider theme={theme}>
         <StatusBar
           backgroundColor="transparent"
@@ -117,7 +119,8 @@ export default function App() {
         <AuthContext.Consumer>
           {({ authProcessing }) => <GlobalLoadingOverlay visible={authProcessing} />}
         </AuthContext.Consumer>
-      </PaperProvider>
+        </PaperProvider>
+      </SyncProvider>
     </AuthProvider>
   );
 }

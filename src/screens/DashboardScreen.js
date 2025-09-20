@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState, useLayoutEffect } from "react";
 import { View, StyleSheet, ScrollView } from "react-native";
 import { Text, IconButton, Button, useTheme } from "react-native-paper";
 import { AuthContext } from "../context/AuthContext";
+import { SyncContext } from '../context/SyncContext';
 import StatCard from "../components/StatCard";
 import MiniBarChart from "../components/MiniBarChart";
 import QuickList from "../components/QuickList";
@@ -16,6 +17,8 @@ export default function DashboardScreen({ navigation }) {
 
   // mock fetch - replace with real API calls if available
   const { token } = useContext(AuthContext);
+
+  const { refreshKey } = useContext(SyncContext);
 
   useEffect(() => {
     const loadData = async () => {
@@ -89,7 +92,7 @@ export default function DashboardScreen({ navigation }) {
     };
 
     loadData();
-  }, [token]);
+  }, [token, refreshKey]);
 
   // Admin layout
   // set logout icon in header

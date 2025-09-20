@@ -4,10 +4,12 @@ import { View, StyleSheet, FlatList, StatusBar } from "react-native";
 import { Text, Card, Button, Portal, Dialog, TextInput, FAB, IconButton } from "react-native-paper";
 import SearchInput from '../components/SearchInput';
 import { AuthContext } from "../context/AuthContext";
+import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
 
 export default function OrdersScreen({ navigation }) {
   const { token, user } = useContext(AuthContext);
+  const { triggerRefresh } = useContext(SyncContext);
   const [orders, setOrders] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -69,7 +71,7 @@ export default function OrdersScreen({ navigation }) {
     if (selectedItems.length === 0) return;
     try {
       const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ items: selectedItems }) });
-      if (res.ok) { setShowDialog(false); setSelectedItems([]); fetchData(); }
+  if (res.ok) { setShowDialog(false); setSelectedItems([]); fetchData(); try { triggerRefresh(); } catch (e) { } }
       else { const err = await res.json(); alert(err.error || 'Errore'); }
     } catch (err) { console.error(err); }
   };
@@ -168,7 +170,7 @@ export default function OrdersScreen({ navigation }) {
                   const prod = products.find(p => p.id === it.productId) || {};
                   return (
                     <View key={it.id} style={{ marginTop: 6 }}>
-                      <Text>{prod.name || `Prodotto ${it.productId}`} — Qtà: {it.quantity} — Prezzo unitario: €{it.unitPrice} — Subtotale: €{(it.quantity * it.unitPrice).toFixed(2)}</Text>
+                      <Text>{prod.name || `Prodotto ${it.productId}`} — Qtà: {it.quantity} — Prezzo unitario: €{(typeof it.unitPrice === 'number') ? it.unitPrice.toFixed(2) : it.unitPrice} — Subtotale: €{(it.quantity * it.unitPrice).toFixed(2)}</Text>
                     </View>
                   );
                 })}

@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "node --experimental-vm-modules ./src/server.js",
+  "logs:pretty": "node ./scripts/prettyLogs.js",
     "seed": "node ./prisma/seed.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init"

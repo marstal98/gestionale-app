@@ -12,6 +12,7 @@ import {
 } from "react-native-paper";
 import SearchInput from '../components/SearchInput';
 import { AuthContext } from "../context/AuthContext";
+import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
 import { StatusBar } from "react-native";
 import { RadioButton } from "react-native-paper";
@@ -20,6 +21,7 @@ import FloatingToast from "../components/FloatingToast";
 
 export default function UsersScreen() {
     const { token, user: authUser } = useContext(AuthContext);
+    const { triggerRefresh } = useContext(SyncContext);
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
@@ -100,7 +102,7 @@ export default function UsersScreen() {
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ isActive: !u.isActive })
             });
-            if (res.ok) { fetchUsers(); showToast(!u.isActive ? 'Utente riattivato' : 'Utente disattivato', 'success'); }
+            if (res.ok) { fetchUsers(); showToast(!u.isActive ? 'Utente riattivato' : 'Utente disattivato', 'success'); triggerRefresh(); }
             else { const e = await res.json(); showToast(e.error || 'Errore', 'error'); }
         } catch (err) { console.error(err); showToast('Errore server', 'error'); }
     };
@@ -173,6 +175,7 @@ export default function UsersScreen() {
                 setPassword("");
                 setRole("customer");
                 showToast(editingUser ? "Utente modificato con successo" : "Utente inserito con successo", "success");
+                triggerRefresh();
             }
         } catch (err) {
             console.error("Errore salvataggio:", err);
@@ -207,6 +210,7 @@ export default function UsersScreen() {
                 fetchUsers();
                 setShowConfirmDelete(false);
                 showToast("Utente eliminato con successo", "success");
+                triggerRefresh();
             }
         } catch (err) {
             console.error("Errore eliminazione:", err);

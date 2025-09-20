@@ -28,6 +28,9 @@ router.post("/login", async (req, res) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return res.status(401).json({ error: "Credenziali non valide" });
 
+  // prevent login for disabled users
+  if (user.isActive === false) return res.status(403).json({ error: 'Utente disabilitato' });
+
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) return res.status(401).json({ error: "Credenziali non valide" });
 
@@ -37,9 +40,34 @@ router.post("/login", async (req, res) => {
     { expiresIn: "1h" }
   );
 
+  // create refresh token (longer expiry)
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  const refreshToken = jwt.sign({ id: user.id }, refreshSecret, { expiresIn: '7d' });
+
   res.json({
     token,
-    user: { id: user.id, name: user.name, role: user.role }
+    refreshToken,
+    user: { id: user.id, name: user.name, role: user.role, isActive: user.isActive }
+  });
+});
+
+// POST /api/auth/refresh - exchange refresh token for a new access token
+router.post('/refresh', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ error: 'Refresh token mancante' });
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  jwt.verify(refreshToken, refreshSecret, async (err, decoded) => {
+    if (err) return res.status(403).json({ error: 'Refresh token non valido' });
+    try {
+      const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+      if (!user) return res.status(404).json({ error: 'Utente non trovato' });
+      if (user.isActive === false) return res.status(403).json({ error: 'Utente disabilitato' });
+      const newToken = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      res.json({ token: newToken });
+    } catch (e) {
+      console.error('Refresh error', e);
+      res.status(500).json({ error: 'Errore server' });
+    }
   });
 });
 

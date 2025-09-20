@@ -1,6 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, authorizeRole } from '../middleware/auth.js';
+import { logApp, logAudit } from '../utils/logger.js';
 import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 
@@ -24,7 +25,10 @@ router.get('/', authenticateToken, async (req, res) => {
 router.post('/', authenticateToken, authorizeRole('admin'), async (req, res) => {
   const { name, sku, price, stock } = req.body;
   try {
-    const p = await prisma.product.create({ data: { name, sku, price: parseFloat(price), stock: parseInt(stock || 0) } });
+    const roundedPrice = isNaN(parseFloat(price)) ? 0 : Math.round(parseFloat(price) * 100) / 100;
+    const p = await prisma.product.create({ data: { name, sku, price: roundedPrice, stock: parseInt(stock || 0) } });
+    try { logAudit('create', 'product', p.id, req.user || {}, { name: p.name, sku: p.sku, price: p.price, stock: p.stock }); } catch (e) { console.error('Audit log error', e); }
+    logApp('product.create', { productId: p.id, by: req.user?.id || null });
     res.status(201).json(p);
   } catch (err) {
     console.error(err);
@@ -37,7 +41,10 @@ router.put('/:id', authenticateToken, authorizeRole('admin'), async (req, res) =
   const { id } = req.params;
   const { name, sku, price, stock } = req.body;
   try {
-    const updated = await prisma.product.update({ where: { id: parseInt(id) }, data: { name, sku, price: parseFloat(price), stock: parseInt(stock) } });
+    const roundedPrice = isNaN(parseFloat(price)) ? 0 : Math.round(parseFloat(price) * 100) / 100;
+    const updated = await prisma.product.update({ where: { id: parseInt(id) }, data: { name, sku, price: roundedPrice, stock: parseInt(stock) } });
+  try { logAudit('update', 'product', updated.id, req.user || {}, { updatedFields: ['name','sku','price','stock'] }); } catch (e) { console.error('Audit log error', e); }
+  logApp('product.update', { productId: updated.id, by: req.user?.id || null });
     res.json(updated);
   } catch (err) {
     console.error(err);
@@ -49,7 +56,22 @@ router.put('/:id', authenticateToken, authorizeRole('admin'), async (req, res) =
 router.delete('/:id', authenticateToken, authorizeRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
-    await prisma.product.delete({ where: { id: parseInt(id) } });
+    const pid = parseInt(id);
+    const force = req.query.force === 'true' || req.query.force === true;
+    // check references
+    const relatedOrderItem = await prisma.orderItem.findFirst({ where: { productId: pid } });
+    const relatedInventory = await prisma.inventoryMovement.findFirst({ where: { productId: pid } });
+    if (relatedOrderItem || relatedInventory) {
+      if (!force) {
+        return res.status(400).json({ error: 'Impossibile eliminare il prodotto: esistono riferimenti ad ordini o movimenti di inventario' });
+      }
+      // force delete: remove related order items and inventory movements first
+      await prisma.orderItem.deleteMany({ where: { productId: pid } });
+      await prisma.inventoryMovement.deleteMany({ where: { productId: pid } });
+    }
+    await prisma.product.delete({ where: { id: pid } });
+    try { logAudit(force ? 'delete_force' : 'delete', 'product', pid, req.user || {}, { force }); } catch (e) { console.error('Audit log error', e); }
+    logApp('product.delete', { productId: pid, by: req.user?.id || null, force });
     res.json({ message: 'Prodotto eliminato' });
   } catch (err) {
     console.error(err);
@@ -97,9 +119,11 @@ router.post('/import', authenticateToken, authorizeRole('admin'), upload.single(
 
     // First attempt: createMany with skipDuplicates for performance
     try {
-      const result = await prisma.product.createMany({ data: validRows, skipDuplicates: true });
-      // result.count is number created
-      res.json({ created: result.count, skipped: validRows.length - result.count, errors });
+  const result = await prisma.product.createMany({ data: validRows, skipDuplicates: true });
+  // result.count is number created
+  try { logAudit('import', 'product', null, req.user || {}, { created: result.count, skipped: validRows.length - result.count }); } catch (e) { console.error('Audit log error', e); }
+  logApp('product.import', { by: req.user?.id || null, created: result.count, skipped: validRows.length - result.count });
+  res.json({ created: result.count, skipped: validRows.length - result.count, errors });
       return;
     } catch (bulkErr) {
       console.error('createMany failed, falling back to per-row create', bulkErr);
@@ -124,7 +148,9 @@ router.post('/import', authenticateToken, authorizeRole('admin'), upload.single(
       }
     }
 
-    res.json({ created, skipped, errors });
+  try { logAudit('import', 'product', null, req.user || {}, { created, skipped, errors }); } catch (e) { console.error('Audit log error', e); }
+  logApp('product.import', { by: req.user?.id || null, created, skipped });
+  res.json({ created, skipped, errors });
   } catch (err) {
     console.error('Import error', err);
     res.status(500).json({ error: 'Errore importazione CSV', details: err.message });
@@ -136,8 +162,10 @@ router.get('/export', authenticateToken, authorizeRole('admin'), async (req, res
   try {
     const products = await prisma.product.findMany();
     const header = 'id,name,sku,price,stock,createdAt\n';
-    const rows = products.map(p => `${p.id},"${p.name.replace(/"/g,'""')}",${p.sku || ''},${p.price},${p.stock},${p.createdAt.toISOString()}`).join('\n');
+  const rows = products.map(p => `${p.id},"${p.name.replace(/"/g,'""')}",${p.sku || ''},${(typeof p.price === 'number') ? p.price.toFixed(2) : p.price},${p.stock},${p.createdAt.toISOString()}`).join('\n');
     const csv = header + rows;
+    try { logAudit('export', 'product', null, req.user || {}, { count: products.length }); } catch (e) { console.error('Audit log error', e); }
+    logApp('product.export', { by: req.user?.id || null, count: products.length });
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="products.csv"');
     res.send(csv);

@@ -5,10 +5,12 @@ import FloatingToast from '../components/FloatingToast';
 import SearchInput from '../components/SearchInput';
 import { ScrollView, Dimensions } from 'react-native';
 import { AuthContext } from '../context/AuthContext';
+import { SyncContext } from '../context/SyncContext';
 import { API_URL } from '../config';
 
 export default function NewOrderScreen({ navigation }) {
   const { token } = useContext(AuthContext);
+  const { triggerRefresh } = useContext(SyncContext);
   const [products, setProducts] = useState([]);
   const [query, setQuery] = useState('');
   const [cart, setCart] = useState([]); // { productId, quantity }
@@ -58,9 +60,10 @@ export default function NewOrderScreen({ navigation }) {
       if (res.ok) {
         // show success toast then navigate back so user sees the confirmation
         setToast({ visible: true, message: 'ordine creato con successo', type: 'success' });
+        try { triggerRefresh(); } catch (e) { }
         setTimeout(() => {
           try {
-            navigation.getParent()?.navigate('MainTabs', { screen: 'Ordini', params: { refreshToken: Date.now() } });
+            navigation.getParent()?.navigate('MainTabs', { screen: 'Ordini' });
           } catch (e) { /* ignore */ }
           navigation.goBack();
         }, 700);
@@ -108,7 +111,7 @@ export default function NewOrderScreen({ navigation }) {
             <Card.Content>
               <Text style={{ fontWeight: '700' }}>{item.name}</Text>
               <Text>SKU: {item.sku}</Text>
-              <Text>Prezzo: €{item.price} — Disp: {item.stock}</Text>
+              <Text>Prezzo: €{(typeof item.price === 'number') ? item.price.toFixed(2) : item.price} — Disp: {item.stock}</Text>
             </Card.Content>
             <Card.Actions>
               <Button onPress={() => addToCart(item)}>Aggiungi</Button>
