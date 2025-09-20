@@ -24,6 +24,12 @@ export const AuthProvider = ({ children }) => {
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
           if (storedRefresh) setRefreshToken(storedRefresh);
+          // schedule timers for an existing token so refresh happens silently
+          try {
+            scheduleTimers(storedToken, JSON.parse(storedUser), storedRefresh);
+          } catch (e) {
+            console.warn('Could not schedule timers on startup', e);
+          }
         }
       } catch (e) {
         console.error("Errore caricamento storage", e);
@@ -45,65 +51,11 @@ export const AuthProvider = ({ children }) => {
 
     await AsyncStorage.setItem("token", data.token);
     await AsyncStorage.setItem("user", JSON.stringify(data.user));
-    // setup auto-logout based on token expiry
+    // schedule timers for token expiry/refresh
     try {
-      const parts = data.token.split('.');
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-        if (payload && payload.exp) {
-          const expiresAt = payload.exp * 1000; // ms
-          const now = Date.now();
-          const msLeft = expiresAt - now;
-          if (msLeft > 0) {
-            // schedule auto-logout as backup
-            if (logoutTimerId) clearTimeout(logoutTimerId);
-            const id = setTimeout(() => {
-              logout();
-            }, msLeft + 500);
-            setLogoutTimerId(id);
-
-            // schedule token refresh 60s before expiry (if refreshToken available)
-            if (data.refreshToken) {
-              const refreshMs = msLeft - 60000; // 1 minute before
-              if (refreshMs > 0) {
-                if (refreshTimerId) clearTimeout(refreshTimerId);
-                const rid = setTimeout(async () => {
-                  try {
-                    // call refresh endpoint
-                    const res = await fetch(`${API_URL}/auth/refresh`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ refreshToken: data.refreshToken })
-                    });
-                    if (res.ok) {
-                      const d = await res.json();
-                      if (d.token) {
-                        // update token in state and storage, then reschedule
-                        setToken(d.token);
-                        await AsyncStorage.setItem('token', d.token);
-                        // recursively call login-like scheduling to set timers
-                        await login({ token: d.token, user: data.user, refreshToken: data.refreshToken });
-                      } else {
-                        // cannot refresh -> logout
-                        logout();
-                      }
-                    } else {
-                      // refresh failed
-                      logout();
-                    }
-                  } catch (e) {
-                    console.error('Refresh token error', e);
-                    logout();
-                  }
-                }, refreshMs);
-                setRefreshTimerId(rid);
-              }
-            }
-          }
-        }
-      }
+      scheduleTimers(data.token, data.user, data.refreshToken);
     } catch (e) {
-      console.warn('Could not parse token for expiry', e);
+      console.warn('Could not schedule timers on login', e);
     }
   };
 
@@ -111,6 +63,7 @@ export const AuthProvider = ({ children }) => {
     try {
       await AsyncStorage.removeItem("token");
       await AsyncStorage.removeItem("user");
+      await AsyncStorage.removeItem('refreshToken');
     } catch (e) {
       console.error("Errore durante il logout", e);
     } finally {
@@ -118,8 +71,81 @@ export const AuthProvider = ({ children }) => {
         clearTimeout(logoutTimerId);
         setLogoutTimerId(null);
       }
+      if (refreshTimerId) {
+        clearTimeout(refreshTimerId);
+        setRefreshTimerId(null);
+      }
+      setRefreshToken(null);
       setToken(null);
       setUser(null);
+    }
+  };
+
+  // helper to schedule logout and refresh timers based on token expiry
+  const scheduleTimers = (jwtToken, userObj, refreshTok) => {
+    // clear existing timers
+    if (logoutTimerId) {
+      clearTimeout(logoutTimerId);
+      setLogoutTimerId(null);
+    }
+    if (refreshTimerId) {
+      clearTimeout(refreshTimerId);
+      setRefreshTimerId(null);
+    }
+
+    try {
+      const parts = jwtToken.split('.');
+      if (parts.length !== 3) return;
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+      if (!payload || !payload.exp) return;
+      const expiresAt = payload.exp * 1000;
+      const now = Date.now();
+      const msLeft = expiresAt - now;
+      if (msLeft <= 0) {
+        // token already expired
+        logout();
+        return;
+      }
+      // schedule auto-logout as backup
+      const id = setTimeout(() => {
+        logout();
+      }, msLeft + 500);
+      setLogoutTimerId(id);
+
+      // schedule refresh 60s before expiry if we have a refresh token
+      if (refreshTok) {
+        const refreshMs = msLeft - 60000;
+        if (refreshMs > 0) {
+          const rid = setTimeout(async () => {
+            try {
+              const res = await fetch(`${API_URL}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: refreshTok })
+              });
+              if (res.ok) {
+                const d = await res.json();
+                if (d.token) {
+                  // update token and reschedule
+                  setToken(d.token);
+                  await AsyncStorage.setItem('token', d.token);
+                  scheduleTimers(d.token, userObj, refreshTok);
+                } else {
+                  logout();
+                }
+              } else {
+                logout();
+              }
+            } catch (e) {
+              console.error('Refresh token error', e);
+              logout();
+            }
+          }, refreshMs);
+          setRefreshTimerId(rid);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not parse token for expiry', e);
     }
   };
 

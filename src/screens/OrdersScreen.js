@@ -115,8 +115,8 @@ export default function OrdersScreen({ navigation }) {
             <Card.Content>
               <Text>#{item.id} - {item.status}</Text>
               <Text>Totale: €{Number(item.total).toFixed(2)}</Text>
-              <Text>Cliente: {item.customer?.name || item.customer?.email || 'Cliente non assegnato'}</Text>
-              <Text>Assegnatario: {item.assignedTo ? (item.assignedTo.name || item.assignedTo.email) : 'Non assegnato'}</Text>
+              <Text>Cliente: {item.customer?.name || 'Cliente non assegnato'}</Text>
+              <Text>Assegnatario: {item.assignedTo ? item.assignedTo.name : 'Non assegnato'}</Text>
             </Card.Content>
           </Card>
         )}
@@ -180,7 +180,7 @@ export default function OrdersScreen({ navigation }) {
             {selectedOrder ? (
               <>
                 <Text>Status: {selectedOrder.status}</Text>
-                <Text>Cliente: {selectedOrder.customer?.name || selectedOrder.customer?.email || '—'}</Text>
+                <Text>Cliente: {selectedOrder.customer?.name || '—'}</Text>
                 <Text>Creato: {new Date(selectedOrder.createdAt).toLocaleString()}</Text>
                 <Text style={{ marginTop: 8, fontWeight: '700' }}>Articoli:</Text>
                 {selectedOrder.items && selectedOrder.items.map((it) => {
@@ -193,7 +193,25 @@ export default function OrdersScreen({ navigation }) {
                 })}
                 <Text style={{ marginTop: 8, fontWeight: '700' }}>Totale ordine: €{Number(selectedOrder.total).toFixed(2)}</Text>
                 {selectedOrder.notes ? <Text style={{ marginTop: 8 }}>Note: {selectedOrder.notes}</Text> : null}
-                <Text style={{ marginTop: 8 }}>Assegnato a: {selectedOrder.assignedTo ? (selectedOrder.assignedTo.name || selectedOrder.assignedTo.email) : '—'}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                  <Text style={{ flex: 1 }}>Assegnato a: {selectedOrder.assignedTo ? selectedOrder.assignedTo.name : '—'}</Text>
+                  {user?.role === 'admin' && selectedOrder.assignedTo && (
+                    <IconButton icon="close" size={20} onPress={async () => {
+                      try {
+                        const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ assignedToId: null }) });
+                        if (res.ok) {
+                          selectedOrder.assignedTo = null;
+                          selectedOrder.assignedToId = null;
+                          setSelectedOrder({ ...selectedOrder });
+                          fetchData();
+                          try { triggerRefresh(); } catch (e) {}
+                        } else {
+                          const err = await res.json(); alert(err.error || 'Errore rimozione assegnatario');
+                        }
+                      } catch (e) { console.error(e); }
+                    }} accessibilityLabel="Rimuovi assegnatario" />
+                  )}
+                </View>
               </>
             ) : null}
           </Dialog.Content>

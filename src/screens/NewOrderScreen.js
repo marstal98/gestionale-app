@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { View, FlatList, StyleSheet, Keyboard, Pressable } from 'react-native';
+import { View, FlatList, StyleSheet, Keyboard } from 'react-native';
 import { Text, TextInput, Button, Card, FAB, Portal, Modal, IconButton, Badge, Surface } from 'react-native-paper';
 import FloatingToast from '../components/FloatingToast';
 import SearchInput from '../components/SearchInput';
@@ -198,17 +198,26 @@ export default function NewOrderScreen({ navigation }) {
                 <Text style={{ fontWeight: '700', marginBottom: 6 }}>Cliente:</Text>
                 {user?.role === 'admin' ? (
                   <>
-                    <Pressable onPress={() => { if (users.length) setCustomerPickerVisible(true); }}>
+                    <View style={{ position: 'relative' }}>
                       <TextInput
                         label="Cliente"
                         value={(() => {
                           const u = users.find(x => x.id === customerId);
-                          return u ? `${u.name} (${u.email})` : '';
+                          return u ? u.name : '';
                         })()}
-                        editable={false}
-                        pointerEvents="none"
+                        onFocus={() => { if (users.length) { setCustomerPickerVisible(true); Keyboard.dismiss(); } }}
+                        showSoftInputOnFocus={false}
+                        caretHidden={true}
                       />
-                    </Pressable>
+                      <IconButton
+                        icon={customerId ? 'close' : 'chevron-down'}
+                        size={20}
+                        color="#333"
+                        style={{ position: 'absolute', right: 6, top: 18 }}
+                        onPress={() => { if (customerId) setCustomerId(null); else if (users.length) { setCustomerPickerVisible(true); Keyboard.dismiss(); } }}
+                        accessibilityLabel={customerId ? 'Rimuovi cliente' : 'Apri selezione cliente'}
+                      />
+                    </View>
                     <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere il cliente (opzionale)</Text>
                     <AssigneePicker visible={customerPickerVisible} onDismiss={() => setCustomerPickerVisible(false)} users={users} onSelect={(u) => setCustomerId(u.id)} roleFilter={'customer'} title={'Seleziona cliente'} />
                   </>
@@ -222,17 +231,26 @@ export default function NewOrderScreen({ navigation }) {
                 {/* simple select: only admin can choose an assignee; others will be assigned to themselves */}
                 {user?.role === 'admin' ? (
                   <>
-                    <Pressable onPress={() => { if (users.length) setPickerVisible(true); }}>
+                    <View style={{ position: 'relative' }}>
                       <TextInput
                         label="Assegnato a"
                         value={(() => {
                           const u = users.find(x => x.id === assignedToId);
-                          return u ? `${u.name} (${u.email})` : '';
+                          return u ? u.name : '';
                         })()}
-                        editable={false}
-                        pointerEvents="none"
+                        onFocus={() => { if (users.length) { setPickerVisible(true); Keyboard.dismiss(); } }}
+                        showSoftInputOnFocus={false}
+                        caretHidden={true}
                       />
-                    </Pressable>
+                      <IconButton
+                        icon={assignedToId ? 'close' : 'chevron-down'}
+                        size={20}
+                        color="#333"
+                        style={{ position: 'absolute', right: 6, top: 18 }}
+                        onPress={() => { if (assignedToId) setAssignedToId(null); else if (users.length) { setPickerVisible(true); Keyboard.dismiss(); } }}
+                        accessibilityLabel={assignedToId ? 'Rimuovi assegnatario' : 'Apri selezione assegnatario'}
+                      />
+                    </View>
                     <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere un assegnatario</Text>
                     <AssigneePicker visible={pickerVisible} onDismiss={() => setPickerVisible(false)} users={users} onSelect={(u) => setAssignedToId(u.id)} roleFilter={['employee','admin']} title={'Seleziona assegnatario'} />
                   </>
