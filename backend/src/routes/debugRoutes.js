@@ -18,4 +18,8 @@ router.get('/dbinfo', (req, res) => {
   res.json({ cwd: process.cwd(), DATABASE_URL: dbUrl, resolvedPath: resolved });
 });
 
+router.get('/ping', (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString(), host: req.hostname });
+});
+
 export default router;

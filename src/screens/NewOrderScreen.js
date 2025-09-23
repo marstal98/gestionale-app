@@ -197,7 +197,7 @@ export default function NewOrderScreen({ navigation }) {
               <View style={{ marginBottom: 8 }}>
                 <Text style={{ fontWeight: '700', marginBottom: 6 }}>Cliente:</Text>
                 {user?.role === 'admin' ? (
-                  <>
+                  <View>
                     <View style={{ position: 'relative' }}>
                       <TextInput
                         label="Cliente"
@@ -220,7 +220,7 @@ export default function NewOrderScreen({ navigation }) {
                     </View>
                     <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere il cliente (opzionale)</Text>
                     <AssigneePicker visible={customerPickerVisible} onDismiss={() => setCustomerPickerVisible(false)} users={users} onSelect={(u) => setCustomerId(u.id)} roleFilter={'customer'} title={'Seleziona cliente'} />
-                  </>
+                  </View>
                 ) : (
                   <TextInput label="Cliente" value={user?.name || ''} editable={false} />
                 )}
@@ -230,7 +230,7 @@ export default function NewOrderScreen({ navigation }) {
                 <Text style={{ fontWeight: '700', marginBottom: 6 }}>Assegna a:</Text>
                 {/* simple select: only admin can choose an assignee; others will be assigned to themselves */}
                 {user?.role === 'admin' ? (
-                  <>
+                  <View>
                     <View style={{ position: 'relative' }}>
                       <TextInput
                         label="Assegnato a"
@@ -253,17 +253,40 @@ export default function NewOrderScreen({ navigation }) {
                     </View>
                     <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Tocca per scegliere un assegnatario</Text>
                     <AssigneePicker visible={pickerVisible} onDismiss={() => setPickerVisible(false)} users={users} onSelect={(u) => setAssignedToId(u.id)} roleFilter={['employee','admin']} title={'Seleziona assegnatario'} />
-                  </>
+                  </View>
                 ) : (
-                  <>
+                  <View>
                     <TextInput label="Assegnato a" value={user?.name || ''} editable={false} />
                     <Text style={{ fontSize: 12, color: '#666', marginTop: 6 }}>L'ordine sarà assegnato a te</Text>
-                  </>
+                  </View>
                 )}
               </View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                 <Button mode="outlined" onPress={() => { setCart([]); Keyboard.dismiss(); }}>Svuota</Button>
-                <Button mode="contained" onPress={() => { submitOrder(); setCartExpanded(false); }} disabled={cart.length === 0}>Crea ordine</Button>
+                <View style={{ flexDirection: 'row' }}>
+                  <Button mode="outlined" onPress={async () => {
+                    // Save as draft: send status: 'draft'
+                    const itemsPayload = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0 })).filter(i => i.quantity > 0);
+                    if (itemsPayload.length === 0) { setToast({ visible: true, message: 'Carrello vuoto o quantità non valide', type: 'error' }); return; }
+                    try {
+                      const payload = { items: itemsPayload, status: 'draft' };
+                      if (user?.role === 'admin' && assignedToId) payload.assignedToId = assignedToId;
+                      if (user?.role === 'admin' && customerId) payload.customerId = customerId;
+                      const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+                      const data = await res.json();
+                      if (res.ok) {
+                        setToast({ visible: true, message: 'Bozza salvata', type: 'success' });
+                        try { triggerRefresh(); } catch (e) { }
+                        setCart([]);
+                        setCartExpanded(false);
+                        setTimeout(() => { navigation.goBack(); }, 600);
+                      } else {
+                        setToast({ visible: true, message: data?.error || 'Errore salvataggio bozza', type: 'error' });
+                      }
+                    } catch (err) { console.error('save draft', err); setToast({ visible: true, message: 'Errore server', type: 'error' }); }
+                  }} style={{ marginRight: 8 }}>Salva bozza</Button>
+                  <Button mode="contained" onPress={() => { submitOrder(); setCartExpanded(false); }} disabled={cart.length === 0}>Crea ordine</Button>
+                </View>
               </View>
             </View>
           </Surface>

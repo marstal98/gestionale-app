@@ -1,8 +1,10 @@
+import 'react-native-gesture-handler';
 import React, { useContext } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Provider as PaperProvider, DefaultTheme } from "react-native-paper";
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { AuthProvider, AuthContext } from "./src/context/AuthContext";
 import { SyncProvider } from './src/context/SyncContext';
@@ -106,6 +108,7 @@ export default function App() {
   return (
     <AuthProvider>
       <SyncProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <PaperProvider theme={theme}>
         <StatusBar
           backgroundColor="transparent"
@@ -120,6 +123,7 @@ export default function App() {
           {({ authProcessing }) => <GlobalLoadingOverlay visible={authProcessing} />}
         </AuthContext.Consumer>
         </PaperProvider>
+      </GestureHandlerRootView>
       </SyncProvider>
     </AuthProvider>
   );

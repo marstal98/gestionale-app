@@ -6,6 +6,8 @@ import { SyncContext } from '../context/SyncContext';
 import StatCard from "../components/StatCard";
 import MiniBarChart from "../components/MiniBarChart";
 import QuickList from "../components/QuickList";
+import TopMetrics from "../components/TopMetrics";
+import RecentOrdersCard from "../components/RecentOrdersCard";
 import { API_URL } from "../config";
 
 export default function DashboardScreen({ navigation }) {
@@ -28,8 +30,11 @@ export default function DashboardScreen({ navigation }) {
           fetch(`${API_URL}/orders`, { headers: { Authorization: `Bearer ${token}` } }),
         ]);
 
-        const usersData = uRes.ok ? await uRes.json() : [];
-        const ordersData = oRes.ok ? await oRes.json() : [];
+        const uDataRaw = uRes.ok ? await uRes.json() : [];
+        const oDataRaw = oRes.ok ? await oRes.json() : [];
+        // normalize API responses which sometimes return { ok:true, data: [...] }
+        const usersData = Array.isArray(uDataRaw) ? uDataRaw : (uDataRaw?.data || []);
+        const ordersData = Array.isArray(oDataRaw) ? oDataRaw : (oDataRaw?.data || []);
 
         // stats
         const totalUsers = Array.isArray(usersData) ? usersData.length : 0;
@@ -67,7 +72,9 @@ export default function DashboardScreen({ navigation }) {
         // debug log: show counts and buckets
         try { console.log('[Dashboard] orders:', Array.isArray(ordersData) ? ordersData.length : 0, 'buckets:', buckets); } catch (e) {}
 
-        setStats({ users: totalUsers, orders: totalOrders, inProgress, completed, last30: buckets });
+  // compute simple revenue metric (sum of order.total where present)
+  const revenue = Array.isArray(ordersData) ? ordersData.reduce((s, it) => s + (Number(it.total) || 0), 0) : 0;
+  setStats({ users: totalUsers, orders: totalOrders, inProgress, completed, revenue, last30: buckets });
 
         // recent users - take latest by createdAt if present
         if (Array.isArray(usersData)) {
@@ -81,8 +88,7 @@ export default function DashboardScreen({ navigation }) {
         if (Array.isArray(ordersData)) {
           const recentO = [...ordersData]
             .sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-            .slice(0,5)
-            .map(o => ({ title: `#${o.id || o.orderNumber || o._id || 'N/A'}`, meta: o.status || '' }));
+            .slice(0,6);
           setRecentOrders(recentO);
         }
 
@@ -102,7 +108,10 @@ export default function DashboardScreen({ navigation }) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
         <View style={[styles.headerRow, { alignItems: 'center' }] }>
-          <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+          <View>
+            <Text style={styles.title}>Benvenuto, {user?.name}</Text>
+            <Text style={{ color: '#666' }}>Panoramica rapida delle attività</Text>
+          </View>
           <IconButton
             icon="logout-variant"
             size={24}
@@ -113,37 +122,19 @@ export default function DashboardScreen({ navigation }) {
           />
         </View>
 
-        <View style={[styles.row, styles.section]}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <StatCard title="Totale utenti" value={stats.users} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <StatCard title="Totale ordini" value={stats.orders} />
-          </View>
-        </View>
-
-        <View style={[styles.row, styles.section]}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <StatCard title="In corso" value={stats.inProgress} color="#FFC107" />
-          </View>
-          <View style={{ flex: 1, marginLeft: 8 }}>
-            <StatCard title="Completati" value={stats.completed} color="#4CAF50" />
-          </View>
-        </View>
+        <TopMetrics metrics={stats} />
 
         <View style={styles.section}>
           <Text style={{ fontWeight: '700', marginBottom: 8 }}>Andamento ordini (ultimi 30 giorni)</Text>
           <MiniBarChart data={stats?.last30 || []} />
         </View>
 
-        {/* quick buttons removed as requested */}
-
         <View style={styles.section}>
           <QuickList title="Ultimi utenti" items={recentUsers} />
         </View>
 
         <View style={styles.section}>
-          <QuickList title="Ultimi ordini" items={recentOrders} />
+          <RecentOrdersCard orders={recentOrders} />
         </View>
 
       </ScrollView>

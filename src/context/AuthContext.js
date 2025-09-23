@@ -93,10 +93,49 @@ export const AuthProvider = ({ children }) => {
       setRefreshTimerId(null);
     }
 
+    // small base64/url decoder compatible with React Native (no Buffer)
+    const base64UrlDecode = (input) => {
+      try {
+        // convert from base64url to base64
+        let base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+        while (base64.length % 4) base64 += '=';
+        const atobFunc = (typeof globalThis !== 'undefined' && typeof globalThis.atob === 'function') ? globalThis.atob : (typeof atob === 'function' ? atob : null);
+        let binary = null;
+        if (atobFunc) {
+          binary = atobFunc(base64);
+        } else if (typeof Buffer !== 'undefined') {
+          // Node / some environments
+          binary = Buffer.from(base64, 'base64').toString('binary');
+        } else {
+          // fallback simple decoder
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+          let str = '';
+          let i = 0;
+          base64 = base64.replace(/=+$/, '');
+          for (let bc = 0, bs, buffer, idx = 0; buffer = base64.charAt(idx++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? str += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
+            buffer = chars.indexOf(buffer);
+          }
+          binary = str;
+        }
+        // decode percent-encoding to get utf8 string
+        try {
+          return decodeURIComponent(Array.prototype.map.call(binary, function(c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+        } catch (e) {
+          return binary;
+        }
+      } catch (e) {
+        return null;
+      }
+    };
+
     try {
       const parts = jwtToken.split('.');
       if (parts.length !== 3) return;
-      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+      const decoded = base64UrlDecode(parts[1]);
+      if (!decoded) return;
+      const payload = JSON.parse(decoded);
       if (!payload || !payload.exp) return;
       const expiresAt = payload.exp * 1000;
       const now = Date.now();

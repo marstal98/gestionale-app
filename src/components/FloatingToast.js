@@ -9,6 +9,7 @@ export default function FloatingToast({ visible, message, onHide, type = "succes
   const translateY = useRef(new Animated.Value(-20)).current;
 
   useEffect(() => {
+    const TOAST_DURATION = 2000; // 2 seconds for all toasts
     if (visible) {
       // Animazione entrata
       Animated.parallel([
@@ -24,7 +25,7 @@ export default function FloatingToast({ visible, message, onHide, type = "succes
         }),
       ]).start();
 
-      // Dopo 2.5s sparisce
+      // Dopo TOAST_DURATION sparisce
       const timer = setTimeout(() => {
         Animated.timing(opacity, {
           toValue: 0,
@@ -33,7 +34,7 @@ export default function FloatingToast({ visible, message, onHide, type = "succes
         }).start(() => {
           onHide?.();
         });
-      }, 2500);
+      }, TOAST_DURATION);
 
       return () => clearTimeout(timer);
     }

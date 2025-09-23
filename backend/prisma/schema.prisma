@@ -49,8 +49,9 @@ model Product {
 }
 
 enum OrderStatus {
+  draft
   pending
-  processing
+  in_progress
   completed
   cancelled
 }
