@@ -10,7 +10,7 @@ export default function QuickList({ items = [], title = '' }) {
         {items.map((it, idx) => (
           <View key={idx} style={styles.row}>
             <Text style={{ flex: 1 }}>{it.title}</Text>
-            <Text style={{ color: '#777' }}>{it.meta}</Text>
+            <Text style={{ color: it.metaColor || '#777' }}>{it.meta}</Text>
           </View>
         ))}
       </Card.Content>

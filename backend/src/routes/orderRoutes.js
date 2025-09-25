@@ -192,9 +192,8 @@ router.post('/', authenticateToken, async (req, res) => {
       return order;
     });
 
-    try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
-    logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
-  console.debug('[orderRoutes] POST /orders created', { id: result.id, total: result.total });
+  try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
+  logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
     res.status(201).json(result);
   } catch (err) {
     console.error('Order creation error:', err && err.stack ? err.stack : err);

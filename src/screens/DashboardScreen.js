@@ -16,6 +16,7 @@ export default function DashboardScreen({ navigation }) {
   const [stats, setStats] = useState({ users: 0, orders: 0, inProgress: 0, completed: 0 });
   const [recentUsers, setRecentUsers] = useState([]);
   const [recentOrders, setRecentOrders] = useState([]);
+  const [lowStock, setLowStock] = useState([]);
 
   // mock fetch - replace with real API calls if available
   const { token } = useContext(AuthContext);
@@ -25,13 +26,15 @@ export default function DashboardScreen({ navigation }) {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [uRes, oRes] = await Promise.all([
+        const [uRes, oRes, pRes] = await Promise.all([
           fetch(`${API_URL}/users`, { headers: { Authorization: `Bearer ${token}` } }),
           fetch(`${API_URL}/orders`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${API_URL}/products`, { headers: { Authorization: `Bearer ${token}` } }),
         ]);
 
         const uDataRaw = uRes.ok ? await uRes.json() : [];
-        const oDataRaw = oRes.ok ? await oRes.json() : [];
+  const oDataRaw = oRes.ok ? await oRes.json() : [];
+  const pDataRaw = pRes.ok ? await pRes.json() : [];
         // normalize API responses which sometimes return { ok:true, data: [...] }
         const usersData = Array.isArray(uDataRaw) ? uDataRaw : (uDataRaw?.data || []);
         const ordersData = Array.isArray(oDataRaw) ? oDataRaw : (oDataRaw?.data || []);
@@ -39,11 +42,20 @@ export default function DashboardScreen({ navigation }) {
         // stats
         const totalUsers = Array.isArray(usersData) ? usersData.length : 0;
         const totalOrders = Array.isArray(ordersData) ? ordersData.length : 0;
-        // count completed vs in progress (best-effort based on status field)
-        const completed = Array.isArray(ordersData)
-          ? ordersData.filter((o) => (o.status || '').toString().toLowerCase().includes('complet')).length
-          : 0;
-        const inProgress = totalOrders - completed;
+        // per-status counts
+        const countByStatus = { draft: 0, pending: 0, in_progress: 0, completed: 0 };
+        if (Array.isArray(ordersData)) {
+          for (const o of ordersData) {
+            const s = (o.status || '').toString();
+            if (s === 'draft') countByStatus.draft += 1;
+            else if (s === 'pending') countByStatus.pending += 1;
+            else if (s === 'in_progress') countByStatus.in_progress += 1;
+            else if (s === 'completed') countByStatus.completed += 1;
+            // other statuses ignored for summary
+          }
+        }
+        const completed = countByStatus.completed;
+        const inProgress = countByStatus.in_progress;
 
         // build last 30 days counts for chart using per-order bucketing
         const buckets = Array.from({ length: 30 }).map(() => 0);
@@ -74,7 +86,7 @@ export default function DashboardScreen({ navigation }) {
 
   // compute simple revenue metric (sum of order.total where present)
   const revenue = Array.isArray(ordersData) ? ordersData.reduce((s, it) => s + (Number(it.total) || 0), 0) : 0;
-  setStats({ users: totalUsers, orders: totalOrders, inProgress, completed, revenue, last30: buckets });
+  setStats({ users: totalUsers, orders: totalOrders, draft: countByStatus.draft, pending: countByStatus.pending, inProgress, completed, revenue, last30: buckets });
 
         // recent users - take latest by createdAt if present
         if (Array.isArray(usersData)) {
@@ -90,6 +102,23 @@ export default function DashboardScreen({ navigation }) {
             .sort((a,b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
             .slice(0,6);
           setRecentOrders(recentO);
+        }
+
+        // Low stock products (threshold: <= 5)
+        const productsData = Array.isArray(pDataRaw) ? pDataRaw : (pDataRaw?.data || []);
+        if (Array.isArray(productsData)) {
+          const low = productsData
+            .filter(p => typeof p.stock === 'number' && p.stock <= 50) // only show up to 50
+            .map(p => ({ ...p }))
+            .sort((a,b) => a.stock - b.stock)
+            .slice(0,6)
+            .map(p => {
+              let color = '#4CAF50'; // green (basso)
+              if (p.stock <= 5) color = '#E53935'; // red critical
+              else if (p.stock <= 20) color = '#FB8C00'; // amber medium
+              return { title: p.name || `Prod ${p.id}`, meta: `Disponibilità: ${p.stock}`, metaColor: color };
+            });
+          setLowStock(low);
         }
 
       } catch (err) {
@@ -130,11 +159,15 @@ export default function DashboardScreen({ navigation }) {
         </View>
 
         <View style={styles.section}>
-          <QuickList title="Ultimi utenti" items={recentUsers} />
+          <RecentOrdersCard orders={recentOrders} />
         </View>
 
         <View style={styles.section}>
-          <RecentOrdersCard orders={recentOrders} />
+          <QuickList title="Prodotti a basso stock" items={lowStock} />
+        </View>
+
+        <View style={styles.section}>
+          <QuickList title="Ultimi utenti" items={recentUsers} />
         </View>
 
       </ScrollView>

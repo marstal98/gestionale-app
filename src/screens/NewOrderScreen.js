@@ -143,7 +143,6 @@ export default function NewOrderScreen({ navigation, route }) {
         // reconstruct the cart from the payload we just sent using product prices
         // so totals update immediately and deterministically.
         if (data && data.id) {
-          console.debug('NewOrderScreen: create/update returned', 'id', data.id, 'total', data.total);
           const serverItems = (data.items || []);
           let pre;
           if (serverItems.length) {
@@ -163,10 +162,8 @@ export default function NewOrderScreen({ navigation, route }) {
           // fetch freshest version from server to make sure totals/unitPrice are those persisted server-side
           try {
             const rFresh = await fetch(`${API_URL}/orders/${data.id}`, { headers: { Authorization: `Bearer ${token}` } });
-            console.debug('NewOrderScreen: fetched fresh order after save/update status', rFresh.status, 'id', data.id);
             if (rFresh.ok) {
               const fresh = await rFresh.json();
-              console.debug('NewOrderScreen: fresh order total from server', fresh.total, 'id', fresh.id);
               const preFresh = (fresh.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
               setCart(preFresh);
               setCustomerId(fresh.customerId || null);
@@ -174,7 +171,7 @@ export default function NewOrderScreen({ navigation, route }) {
               setEditingOrderId(fresh.id || null);
               setEditingOrderStatus(fresh.status || null);
             }
-          } catch (e) { console.debug('NewOrderScreen: error fetching fresh after save/update', e); }
+          } catch (e) { /* ignore */ }
         } else {
           // If server didn't return an id (unexpected), keep local cart as-is — don't clear it.
         }
@@ -406,7 +403,6 @@ export default function NewOrderScreen({ navigation, route }) {
                           // fetch freshest version from server to ensure detail shows updated total
                           try {
                             const rFresh2 = await fetch(`${API_URL}/orders/${data.id}`, { headers: { Authorization: `Bearer ${token}` } });
-                            console.debug('NewOrderScreen: fetch after save-draft status', rFresh2.status);
                             if (rFresh2.ok) {
                               const fresh2 = await rFresh2.json();
                               const preFresh2 = (fresh2.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));

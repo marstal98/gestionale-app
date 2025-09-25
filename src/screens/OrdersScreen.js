@@ -95,12 +95,7 @@ export default function OrdersScreen({ navigation }) {
           } catch(e){}
           let arr = rawArr;
           // dev-only logging to investigate missing counts in Orders screen
-          if (typeof __DEV__ !== 'undefined' && __DEV__) {
-            try {
-              console.debug('fetchData: oRes.ok=', oRes.ok, 'rawArr.length=', rawArr.length, 'search=', String(search), 'appliedFilters=', JSON.stringify(appliedFilters));
-              console.debug('fetchData: sample ids=', rawArr.slice(0,5).map(a => a.id));
-            } catch (e) { /* ignore logging errors */ }
-          }
+          // dev logging removed
           // enforce exclusive view: trash shows only deleted, active shows only non-deleted
           if (effectiveShowTrash) arr = arr.filter(a => !!a.deletedAt);
           else arr = arr.filter(a => !a.deletedAt);
@@ -114,42 +109,35 @@ export default function OrdersScreen({ navigation }) {
             try { setAppliedFilters({ status: [], customers: [], assignees: [] }); } catch (e) {}
             try { setShowTrash(false); } catch (e) {}
             const forced = rawArr.filter(a => !a.deletedAt);
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              try { console.debug('fetchData: auto-clear forced - forcing orders.length =', forced.length); } catch(e){}
-            }
             // ensure this response is still the latest before applying
             if (fetchId === latestFetchRef.current) {
               // keep raw items and rely on derived filter to compute orders
               setApiItems(rawArr);
-              // if a detail dialog is open for a specific order, refresh it from the latest raw array
+              // only refresh selectedOrder when this was a background/automatic fetch
+              // (do not update or open details during a user-visible spinner reload)
               try {
-                if (selectedOrder && selectedOrder.id) {
+                if (!showLoading && selectedOrder && selectedOrder.id) {
                   const fresh = rawArr.find(a => String(a.id) === String(selectedOrder.id));
-                  if (fresh) {
-                    console.debug('OrdersScreen: updating selectedOrder from fetchData with fresh total', fresh.total, 'id', fresh.id);
-                    setSelectedOrder(fresh);
-                  }
+                  if (fresh) setSelectedOrder(fresh);
                 }
               } catch (e) { /* ignore */ }
             } else {
-              if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('fetchData: Ignoring forced result from stale fetch', fetchId, 'current', latestFetchRef.current);
+              // stale fetch - ignore
             }
-          } else {
-            // normal path
-            if (typeof __DEV__ !== 'undefined' && __DEV__) {
-              try { console.debug('fetchData: normal path - setting orders.length =', arr.length); } catch(e){}
-            }
+            } else {
+              // normal path
             if (fetchId === latestFetchRef.current) {
               setApiItems(rawArr);
               try {
-                if (selectedOrder && selectedOrder.id) {
+                // only update selectedOrder on background/automatic fetches (showLoading === false)
+                if (!showLoading && selectedOrder && selectedOrder.id) {
                   const fresh = rawArr.find(a => String(a.id) === String(selectedOrder.id));
                   if (fresh) setSelectedOrder(fresh);
                 }
               } catch (e) { /* ignore */ }
               if (arr.length > 0) autoClearAttemptRef.current = false; // reset attempt on success
             } else {
-              if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('fetchData: Ignoring normal result from stale fetch', fetchId, 'current', latestFetchRef.current);
+              // ignoring stale fetch result
             }
           }
         }
@@ -166,6 +154,9 @@ export default function OrdersScreen({ navigation }) {
       } finally { if (showLoading) setLoading(false); }
     })();
   };
+
+  // sort order: false = newest-first (default), true = oldest-first
+  const [sortAscending, setSortAscending] = useState(false);
 
   // Bulk restore selected orders (used when viewing Cestino)
   const handleBulkRestore = async () => {
@@ -309,6 +300,19 @@ export default function OrdersScreen({ navigation }) {
     return true;
   });
 
+  // apply ordering (by createdAt) to the filtered list
+  const orderedFiltered = useMemo(() => {
+    try {
+      const arr = Array.isArray(filteredOrders) ? [...filteredOrders] : [];
+      arr.sort((a, b) => {
+        const ta = a && a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b && b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return sortAscending ? ta - tb : tb - ta; // desc = newest first by default
+      });
+      return arr;
+    } catch (e) { return filteredOrders; }
+  }, [filteredOrders, sortAscending]);
+
   const statusLabel = (s) => {
     switch ((s || '').toString()) {
       case 'draft': return 'Bozza';
@@ -322,12 +326,8 @@ export default function OrdersScreen({ navigation }) {
 
   // dev-only trace of apiItems and derived counts to debug persistent zero in UI
   useEffect(() => {
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      try {
-        console.debug('DEV TRACE: apiItems.length=', apiItems.length, 'ordersDerived.length=', ordersDerived.length, 'filteredOrders.length=', filteredOrders.length, 'search=', String(search), 'appliedFilters=', JSON.stringify(appliedFilters), 'showTrash=', showTrash);
-      } catch (e) {}
-    }
-  }, [apiItems, ordersDerived.length, filteredOrders.length, search, appliedFilters, showTrash]);
+    // dev trace removed
+  }, [apiItems, ordersDerived.length, /* orderedFiltered length used in UI */ search, appliedFilters, showTrash]);
 
   const getStatusColor = (s) => {
     switch ((s || '').toString()) {
@@ -343,27 +343,12 @@ export default function OrdersScreen({ navigation }) {
   // refetch on navigation params change (used after creating an order)
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      // when returning to this screen (e.g. from NewOrder) ensure we show Active orders
+      // when returning to this screen (e.g. from NewOrder) we intentionally DO NOT auto-refresh
+      // to keep the UI stable; explicit refresh happens when user taps Attivi/Cestino.
+      // Clear filters/search to provide a clean view when navigating back.
       setShowTrash(false);
-  // clear search and filters to avoid stray characters or residual filters hiding results
-  setSearch('');
-  setAppliedFilters({ status: [], customers: [], assignees: [] });
-      // show loading to make refresh visible to user
-      fetchData(false, true);
-      // If we currently have a selectedOrder open, refresh its details as well so totals reflect recent edits
-      (async () => {
-        try {
-          if (selectedOrder && selectedOrder.id) {
-            const r = await fetch(`${API_URL}/orders/${selectedOrder.id}`, { headers: { Authorization: `Bearer ${token}` } });
-            console.debug('OrdersScreen: focus fetch selectedOrder status', r.status, 'id', selectedOrder.id);
-            if (r.ok) {
-              const fresh = await r.json();
-              console.debug('OrdersScreen: focus fetched selected order total', fresh.total, 'id', fresh.id);
-              setSelectedOrder(fresh);
-            }
-          }
-        } catch (e) { console.debug('OrdersScreen: error fetching selectedOrder on focus', e); }
-      })();
+      setSearch('');
+      setAppliedFilters({ status: [], customers: [], assignees: [] });
     });
     return unsubscribe;
   }, [navigation]);
@@ -422,14 +407,9 @@ export default function OrdersScreen({ navigation }) {
 
   useFocusEffect(
     React.useCallback(() => {
-      let mounted = true;
-      // initial fetch shows loader
-      fetchData(undefined, true);
-      // background polling: less frequent and do not display loader to avoid frequent spinner
-      const iv = setInterval(() => {
-        if (mounted) fetchData(undefined, false);
-      }, 15000);
-      return () => { mounted = false; clearInterval(iv); };
+      // We no longer perform background polling or auto-fetch on focus.
+      // Fetching is only triggered by explicit user actions (Attivi/Cestino buttons).
+      return () => {};
     }, [token, refreshKey])
   );
 
@@ -464,6 +444,13 @@ export default function OrdersScreen({ navigation }) {
           >
             Cestino
           </Button>
+          {/* Sort toggle: double-arrow icon to switch newest/oldest */}
+          <IconButton
+            icon="swap-vertical"
+            accessibilityLabel="Ordina"
+            disabled={loading}
+            onPress={() => setSortAscending(prev => !prev)}
+          />
           {loading ? <ActivityIndicator size={18} style={{ marginLeft: 8 }} /> : null}
         </View>
 
@@ -475,7 +462,7 @@ export default function OrdersScreen({ navigation }) {
               {/* Select / Deselect All for currently visible orders */}
               <Button onPress={() => {
                 try {
-                  const visibleIds = (filteredOrders || []).map(o => o.id);
+                  const visibleIds = (orderedFiltered || []).map(o => o.id);
                   if (!visibleIds || visibleIds.length === 0) return;
                   const allSelected = visibleIds.every(id => selectedIds.includes(id));
                   if (allSelected) {
@@ -487,7 +474,7 @@ export default function OrdersScreen({ navigation }) {
                   }
                 } catch (e) { console.debug('SelectAll error', e); }
               }}>{
-                ((filteredOrders || []).length > 0 && (filteredOrders || []).every(o => selectedIds.includes(o.id))) ? 'Deseleziona tutto' : 'Seleziona tutto'
+                ((orderedFiltered || []).length > 0 && (orderedFiltered || []).every(o => selectedIds.includes(o.id))) ? 'Deseleziona tutto' : 'Seleziona tutto'
               }</Button>
               <View style={{ width: 8 }} />
               <Button onPress={() => { setSelectionMode(false); setSelectedIds([]); }}>Annulla</Button>
@@ -536,7 +523,7 @@ export default function OrdersScreen({ navigation }) {
 
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingHorizontal: 2 }}>
                 <Text>Totale ordini: {ordersDerived.length}</Text>
-                <Text>Mostrati: {filteredOrders.length}</Text>
+                <Text>Mostrati: {orderedFiltered.length}</Text>
               </View>
         {/* debug block removed */}
       </View>
@@ -544,7 +531,7 @@ export default function OrdersScreen({ navigation }) {
       <OrdersFilterModal visible={filterVisible} onDismiss={() => setFilterVisible(false)} onApply={(f) => setAppliedFilters(f)} users={usersList} initial={appliedFilters} />
 
       <FlatList
-        data={filteredOrders}
+        data={orderedFiltered}
         keyExtractor={o => o.id.toString()}
         contentContainerStyle={{ padding: 16, paddingTop: 8 }}
   renderItem={({item}) => {
@@ -694,9 +681,9 @@ export default function OrdersScreen({ navigation }) {
       <Portal>
         <Dialog visible={showExportDialog} onDismiss={() => setShowExportDialog(false)}>
           <Dialog.Title>Esporta ordini</Dialog.Title>
-          <Dialog.Content>
-            <Text>Scegli il formato di esportazione per gli ordini filtrati (verranno esportati {filteredOrders.length} ordini):</Text>
-          </Dialog.Content>
+            <Dialog.Content>
+              <Text>Scegli il formato di esportazione per gli ordini filtrati (verranno esportati {orderedFiltered.length} ordini):</Text>
+            </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setShowExportDialog(false)}>Annulla</Button>
             <Button onPress={async () => {
@@ -707,7 +694,7 @@ export default function OrdersScreen({ navigation }) {
                 const rows = [];
                 const header = ['id','total','customer','assignee','status','createdAt'];
                 rows.push(header.join(','));
-                filteredOrders.forEach(o => {
+                orderedFiltered.forEach(o => {
                   const cust = o.customer?.name ? `"${String(o.customer.name).replace(/"/g,'""')}"` : '';
                   const ass = o.assignedTo?.name ? `"${String(o.assignedTo.name).replace(/"/g,'""')}"` : '';
                   const line = [
@@ -735,7 +722,7 @@ export default function OrdersScreen({ navigation }) {
               try {
                 // Build simple HTML for PDF
                 let html = `<html><head><meta charset="utf-8"><style>body{font-family:sans-serif;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body><h3>Ordini esportati</h3><table><thead><tr><th>ID</th><th>Totale</th><th>Cliente</th><th>Assegnatario</th><th>Stato</th><th>Creato</th></tr></thead><tbody>`;
-                filteredOrders.forEach(o => {
+                orderedFiltered.forEach(o => {
                   const cust = o.customer?.name ? String(o.customer.name) : '';
                   const ass = o.assignedTo?.name ? String(o.assignedTo.name) : '';
                   html += `<tr><td>${o.id}</td><td>€${Number(o.total).toFixed(2)}</td><td>${cust}</td><td>${ass}</td><td>${o.status || ''}</td><td>${new Date(o.createdAt).toLocaleString()}</td></tr>`;
@@ -830,7 +817,7 @@ export default function OrdersScreen({ navigation }) {
                 {selectedOrder.notes ? <Text style={{ marginTop: 8, flexWrap: 'wrap' }}>Note: {selectedOrder.notes}</Text> : null}
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
                   <Text style={{ flex: 1, flexWrap: 'wrap' }}>Assegnato a: {selectedOrder.assignedTo ? selectedOrder.assignedTo.name : '—'}</Text>
-                  {user?.role === 'admin' && selectedOrder.assignedTo && (
+                  {user?.role === 'admin' && selectedOrder.assignedTo && !selectedOrder.deletedAt && (
                     <IconButton icon="close" size={20} onPress={async () => {
                       try {
                         const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ assignedToId: null }) });
