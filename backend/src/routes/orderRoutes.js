@@ -25,16 +25,20 @@ const ORDER_INCLUDE = {
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
     const user = req.user;
+    const showDeleted = String(req.query.deleted || 'false') === 'true';
     // respect roles: admin sees all, employee sees assigned, customer sees own
     if (user.role === 'admin') {
-      const orders = await prisma.order.findMany(ORDER_INCLUDE);
+      const where = showDeleted ? {} : { deletedAt: null };
+      const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
       return res.json(orders);
     }
     if (user.role === 'employee') {
-      const orders = await prisma.order.findMany({ where: { assignedToId: user.id }, ...ORDER_INCLUDE });
+      const where = showDeleted ? { assignedToId: user.id } : { assignedToId: user.id, deletedAt: null };
+      const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
       return res.json(orders);
     }
-    const orders = await prisma.order.findMany({ where: { customerId: user.id }, ...ORDER_INCLUDE });
+    const where = showDeleted ? { customerId: user.id } : { customerId: user.id, deletedAt: null };
+    const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
     res.json(orders);
   } catch (err) {
     next(err)
@@ -45,6 +49,8 @@ router.get('/', authenticateToken, async (req, res, next) => {
 router.get('/:id', authenticateToken, async (req, res, next) => {
   try {
     const id = Number(req.params.id)
+    const user = req.user;
+    console.log(`[orderRoutes] GET /orders/${id} requested by user ${user?.id || 'unknown'}`);
     if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: 'Invalid id' })
 
     const order = await prisma.order.findUnique({ where: { id }, ...ORDER_INCLUDE })
@@ -188,6 +194,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
     try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
     logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
+  console.debug('[orderRoutes] POST /orders created', { id: result.id, total: result.total });
     res.status(201).json(result);
   } catch (err) {
     console.error('Order creation error:', err && err.stack ? err.stack : err);
@@ -197,10 +204,107 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 })
 
+// PUT /api/orders/:id - update existing order (used to edit drafts or modify before completion)
+router.put('/:id', authenticateToken, async (req, res, next) => {
+  const user = req.user;
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+  const { items, assignedToId, customerId, status: requestedStatus } = req.body || {};
+  try {
+    const order = await prisma.order.findUnique({ where: { id }, include: { items: true } });
+    if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
+    // Only allow editing if order is not completed and user has rights
+    if (order.status === 'completed') return res.status(400).json({ error: "Ordine completato. Non è possibile modificarlo." });
+    if (user.role === 'customer' && order.customerId !== user.id) return res.status(403).json({ error: 'Accesso negato' });
+    if (user.role === 'employee') return res.status(403).json({ error: 'Solo admin o cliente possono modificare ordini' });
+
+    // If items provided, validate them
+    let newItems = null;
+    if (Array.isArray(items)) {
+      const productIds = items.map(i => i.productId);
+      const products = await prisma.product.findMany({ where: { id: { in: productIds } } });
+      const productsMap = Object.fromEntries(products.map(p => [p.id, p]));
+      for (const it of items) {
+        const p = productsMap[it.productId];
+        const numQty = Number(it.quantity);
+        if (!p) return res.status(400).json({ error: `Prodotto ${it.productId} non trovato` });
+        if (!Number.isFinite(numQty) || !Number.isInteger(numQty) || numQty <= 0) return res.status(400).json({ error: `Quantità non valida per prodotto ${it.productId}` });
+        it.quantity = numQty;
+      }
+      newItems = items.map(i => ({ productId: i.productId, quantity: parseInt(i.quantity || 0), unitPrice: productsMap[i.productId].price }));
+    }
+
+    // We will allow updating customer/assignee only for admin
+    const updateData = {};
+    if (user.role === 'admin') {
+      if (typeof customerId !== 'undefined') updateData.customerId = customerId ? parseInt(customerId) : null;
+      if (typeof assignedToId !== 'undefined') updateData.assignedToId = assignedToId ? parseInt(assignedToId) : null;
+    }
+
+    // Handle status transitions: if requestedStatus moves from draft -> pending/in_progress we must reserve stock
+    const fromStatus = order.status;
+    const toStatus = requestedStatus || order.status;
+
+    // Transaction: remove existing items and recreate if items changed, optionally reserve stock
+    const result = await prisma.$transaction(async (tx) => {
+      // If changing from draft to active (not draft) we need to ensure stock
+      if (fromStatus === 'draft' && toStatus !== 'draft' && Array.isArray(items) && items.length > 0) {
+        // check and decrement stock
+        for (const it of items) {
+          const updated = await tx.product.updateMany({ where: { id: it.productId, stock: { gte: it.quantity } }, data: { stock: { decrement: it.quantity } } });
+          if (updated.count === 0) throw { status: 409, message: `Stock insufficiente per prodotto ${it.productId}` };
+        }
+      }
+
+        // If items changed, delete old items and create new ones. Compute and persist new total.
+        if (Array.isArray(items)) {
+          await tx.orderItem.deleteMany({ where: { orderId: order.id } });
+          const createdItems = await Promise.all(newItems.map(i => tx.orderItem.create({ data: { orderId: order.id, productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice } })));
+          updateData.items = { connect: createdItems.map(ci => ({ id: ci.id })) };
+          // compute total using unitPrice from new items; fallback to product.price if missing
+          let newTotal = 0;
+          const prodIds = createdItems.map(ci => ci.productId);
+          const prods = await tx.product.findMany({ where: { id: { in: prodIds } } });
+          const prodMap = Object.fromEntries(prods.map(p => [p.id, p]));
+          for (const ci of createdItems) {
+            const price = (typeof ci.unitPrice === 'number' && !Number.isNaN(ci.unitPrice)) ? ci.unitPrice : (prodMap[ci.productId]?.price || 0);
+            newTotal += Number(price) * Number(ci.quantity || 0);
+          }
+          updateData.total = newTotal;
+        }
+
+      // Update status if requested
+      if (requestedStatus) updateData.status = requestedStatus;
+      // If admin assigned and status not draft, ensure in_progress
+      if (updateData.assignedToId && updateData.status !== 'draft') updateData.status = 'in_progress';
+
+      const updated = await tx.order.update({ where: { id: order.id }, data: updateData, include: { items: true } });
+
+      // if we reserved stock for new items, create inventory movements
+      if (fromStatus === 'draft' && toStatus !== 'draft' && Array.isArray(items) && items.length > 0) {
+        for (const it of updated.items) {
+          try { await tx.inventoryMovement.create({ data: { productId: it.productId, type: 'reserve', quantity: it.quantity, metadata: { orderId: updated.id } } }); } catch (e) { console.warn('Inventory movement failed', e); }
+        }
+      }
+
+      return updated;
+    });
+
+    try { logAudit('update', 'order', result.id, req.user || {}, { from: fromStatus, to: requestedStatus || fromStatus }); } catch (e) { console.error('Audit log error', e); }
+    logApp('order.update', { orderId: result.id, by: req.user?.id || null });
+    res.json(result);
+  } catch (err) {
+    console.error('Order update error', err);
+    if (err && err.status && err.message) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: 'Errore aggiornamento ordine' });
+  }
+})
+
 // DELETE /api/orders/:id - safe delete
 router.delete('/:id', authenticateToken, async (req, res, next) => {
   const user = req.user // set by authenticateToken
   const id = Number(req.params.id)
+  const permanent = String(req.query.permanent || 'false') === 'true'
 
   try {
     if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: 'Invalid id' })
@@ -208,47 +312,54 @@ router.delete('/:id', authenticateToken, async (req, res, next) => {
   const order = await prisma.order.findUnique({ where: { id }, include: { items: true } })
     if (!order) return res.status(404).json({ ok: false, error: 'Order not found' })
 
-    // Customers can only delete their own draft orders
+    // Customers can only delete their own draft orders -> perform soft-delete
     if (user.role !== 'admin') {
       if (order.customerId !== user.id || order.status !== 'draft') {
         return res.status(403).json({ ok: false, error: 'Forbidden' })
       }
 
-      // Delete orderItems then order
-      await prisma.orderItem.deleteMany({ where: { orderId: id } })
-      await prisma.order.delete({ where: { id } })
-      return res.json({ ok: true })
+      const updated = await prisma.order.update({ where: { id }, data: { deletedAt: new Date(), deletedById: user.id } });
+      try { logAudit('delete', 'order', id, req.user || {}, { deletedBy: user.id, permanent: false }); } catch (e) { console.error('Audit log error', e); }
+      return res.json({ ok: true, softDeleted: true, id: updated.id })
     }
 
-    // Admin deletion: restore stock and create inventoryMovement entries inside a transaction
+    // Admin deletion: if permanent=true then hard-delete and restore stock; otherwise soft-delete
+    if (!permanent) {
+      const updated = await prisma.order.update({ where: { id }, data: { deletedAt: new Date(), deletedById: user.id } });
+      try { logAudit('delete', 'order', id, req.user || {}, { deletedBy: user.id, permanent: false }); } catch (e) { console.error('Audit log error', e); }
+      return res.json({ ok: true, softDeleted: true, id: updated.id })
+    }
+
+    // permanent delete (admin only): restore stock and delete records
     await prisma.$transaction(async (tx) => {
-      // For each orderItem, restore product.stock and create inventoryMovement
       for (const oi of order.items) {
-        await tx.product.update({
-          where: { id: oi.productId },
-          data: { stock: { increment: oi.quantity } },
-        })
-
-        await tx.inventoryMovement.create({
-          data: {
-            productId: oi.productId,
-            quantity: oi.quantity,
-            type: 'RESTORE_ON_ORDER_DELETE',
-            metadata: JSON.stringify({ orderId: id, by: user.id }),
-          },
-        })
+        await tx.product.update({ where: { id: oi.productId }, data: { stock: { increment: oi.quantity } } });
+        await tx.inventoryMovement.create({ data: { productId: oi.productId, quantity: oi.quantity, type: 'RESTORE_ON_ORDER_DELETE', metadata: JSON.stringify({ orderId: id, by: user.id }) } });
       }
+      await tx.orderItem.deleteMany({ where: { orderId: id } });
+      await tx.order.delete({ where: { id } });
+    });
 
-      // Delete items and order
-      await tx.orderItem.deleteMany({ where: { orderId: id } })
-      await tx.order.delete({ where: { id } })
-    })
-
-    logAudit(user.id, `Admin ${user.id} deleted order ${id}`)
-    res.json({ ok: true })
+    try { logAudit('delete', 'order', id, req.user || {}, { deletedBy: user.id, permanent: true }); } catch (e) { console.error('Audit log error', e); }
+    res.json({ ok: true, permanent: true })
   } catch (err) {
     next(err)
   }
+})
+
+// POST /api/orders/:id/restore - restore soft-deleted order
+router.post('/:id/restore', authenticateToken, async (req, res, next) => {
+  const user = req.user; const id = Number(req.params.id);
+  try {
+    if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: 'Invalid id' })
+    const order = await prisma.order.findUnique({ where: { id } });
+    if (!order) return res.status(404).json({ ok: false, error: 'Order not found' });
+    // only admin can restore (could be changed to allow customer restore of own if desired)
+    if (user.role !== 'admin') return res.status(403).json({ ok: false, error: 'Forbidden' });
+    const updated = await prisma.order.update({ where: { id }, data: { deletedAt: null, deletedById: null } });
+    try { logAudit('restore', 'order', id, req.user || {}, { restoredBy: user.id }); } catch (e) { console.error('Audit log error', e); }
+    res.json({ ok: true, restored: true, id: updated.id });
+  } catch (err) { next(err); }
 })
 
 export default router

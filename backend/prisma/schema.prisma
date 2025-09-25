@@ -28,6 +28,8 @@ model User {
   customerOrders Order[]  @relation("OrderCustomer")
   // orders created by this user (admin or customer creating on their behalf)
   createdOrders  Order[]  @relation("OrderCreatedBy")
+  // orders deleted by this user (soft-delete)
+  deletedOrders  Order[]  @relation("OrderDeletedBy")
   createdAt      DateTime @default(now())
 }
 
@@ -71,6 +73,10 @@ model Order {
   status       OrderStatus @default(pending)
   createdAt    DateTime    @default(now())
   items        OrderItem[]
+  // soft-delete metadata
+  deletedAt    DateTime?
+  deletedBy    User?       @relation("OrderDeletedBy", fields: [deletedById], references: [id])
+  deletedById  Int?
 }
 
 model OrderItem {

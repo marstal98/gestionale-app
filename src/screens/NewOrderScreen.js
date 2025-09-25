@@ -9,7 +9,7 @@ import { SyncContext } from '../context/SyncContext';
 import { API_URL } from '../config';
 import AssigneePicker from '../components/AssigneePicker';
 
-export default function NewOrderScreen({ navigation }) {
+export default function NewOrderScreen({ navigation, route }) {
   const { token, user } = useContext(AuthContext);
   const { triggerRefresh } = useContext(SyncContext);
   const [products, setProducts] = useState([]);
@@ -19,6 +19,8 @@ export default function NewOrderScreen({ navigation }) {
   const [users, setUsers] = useState([]);
   const [customerId, setCustomerId] = useState(null);
   const [assignedToId, setAssignedToId] = useState(null);
+  const [editingOrderId, setEditingOrderId] = useState(null);
+  const [editingOrderStatus, setEditingOrderStatus] = useState(null); // track status when editing
   const [pickerVisible, setPickerVisible] = useState(false);
   const [customerPickerVisible, setCustomerPickerVisible] = useState(false);
 
@@ -44,12 +46,58 @@ export default function NewOrderScreen({ navigation }) {
   useEffect(() => { if (token) fetchProducts(); }, [token]);
   useEffect(() => { if (token) fetchUsers(); }, [token]);
 
+  // If navigated with an order to edit, prefill
+  useEffect(() => {
+    const ord = route?.params?.order;
+    if (ord) {
+      // order.items expected as [{ productId, quantity }]
+      const pre = (ord.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice || null }));
+      setCart(pre);
+      setCustomerId(ord.customerId || null);
+      setAssignedToId(ord.assignedToId || null);
+      setEditingOrderId(ord.id || null);
+      if (ord.status) setEditingOrderStatus(ord.status);
+    }
+  }, [route]);
+
+  // Defensive: if editingOrderId provided (for example when arriving from Orders list), fetch the order from API
+  useEffect(() => {
+    const loadExisting = async () => {
+      if (!editingOrderId || !token) return;
+      try {
+        const res = await fetch(`${API_URL}/orders/${editingOrderId}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.status === 404) {
+          setToast({ visible: true, message: 'Ordine non trovato (potrebbe essere stato eliminato)', type: 'error' });
+          setEditingOrderId(null);
+          return;
+        }
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setToast({ visible: true, message: data?.error || 'Errore recupero ordine', type: 'error' });
+          return;
+        }
+        const data = await res.json();
+        // normalize items
+  const pre = (data.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
+        setCart(pre);
+        setCustomerId(data.customerId || null);
+        setAssignedToId(data.assignedToId || null);
+        setEditingOrderId(data.id || null);
+        setEditingOrderStatus(data.status || null);
+      } catch (e) {
+        console.error('load existing order', e);
+        setToast({ visible: true, message: 'Errore comunicazione con il server', type: 'error' });
+      }
+    };
+    loadExisting();
+  }, [editingOrderId, token]);
+
   const filtered = products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || (p.sku || '').toLowerCase().includes(query.toLowerCase()));
 
   const addToCart = (product) => {
     const exists = cart.find(c => c.productId === product.id);
     if (exists) setCart(cart.map(c => c.productId === product.id ? { ...c, quantity: c.quantity + 1 } : c));
-    else setCart([...cart, { productId: product.id, quantity: 1 }]);
+    else setCart([...cart, { productId: product.id, quantity: 1, unitPrice: (typeof product.price === 'number') ? product.price : null }]);
   };
 
   const changeQty = (productId, qty) => {
@@ -68,19 +116,68 @@ export default function NewOrderScreen({ navigation }) {
   };
 
   const submitOrder = async () => {
-    // build payload filtering out items with non-positive quantity
-    const items = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0 })).filter(i => i.quantity > 0);
+  // build payload filtering out items with non-positive quantity
+  // include unitPrice (from cart or fallback to product.price) so payload total is accurate
+  const items = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0, unitPrice: (typeof c.unitPrice === 'number') ? c.unitPrice : (products.find(p => p.id === c.productId)?.price || null) })).filter(i => i.quantity > 0);
     if (items.length === 0) { setToast({ visible: true, message: 'Carrello vuoto o quantità non valide', type: 'error' }); return; }
     try {
-  const payload = { items };
-  if (user?.role === 'admin' && assignedToId) payload.assignedToId = assignedToId;
-  if (user?.role === 'admin' && customerId) payload.customerId = customerId;
-  const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+      const payloadTotal = items.reduce((s, it) => s + ((typeof it.unitPrice === 'number' ? it.unitPrice : 0) * it.quantity), 0);
+      const payload = { items, total: payloadTotal };
+      if (user?.role === 'admin' && assignedToId) payload.assignedToId = assignedToId;
+      if (user?.role === 'admin' && customerId) payload.customerId = customerId;
+      let res;
+      if (editingOrderId) {
+        // when publishing an edited draft, ensure status moves to 'pending'
+        if (editingOrderStatus === 'draft') payload.status = 'pending';
+        res = await fetch(`${API_URL}/orders/${editingOrderId}`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+      } else {
+        res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+      }
       const data = await res.json();
       if (res.ok) {
         // show success toast then navigate back so user sees the confirmation
-        setToast({ visible: true, message: 'ordine creato con successo', type: 'success' });
+        setToast({ visible: true, message: editingOrderId ? 'ordine aggiornato con successo' : 'ordine creato con successo', type: 'success' });
         try { triggerRefresh(); } catch (e) { }
+        // Prefer syncing local cart from server response if it contains items/unitPrice.
+        // If server does not return detailed items (common for draft endpoints),
+        // reconstruct the cart from the payload we just sent using product prices
+        // so totals update immediately and deterministically.
+        if (data && data.id) {
+          console.debug('NewOrderScreen: create/update returned', 'id', data.id, 'total', data.total);
+          const serverItems = (data.items || []);
+          let pre;
+          if (serverItems.length) {
+            pre = serverItems.map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
+          } else {
+            // fallback: use the items we sent and look up product prices locally
+            pre = items.map(i => {
+              const p = products.find(pp => pp.id === i.productId) || {};
+              return { productId: i.productId, quantity: i.quantity, unitPrice: (typeof p.price === 'number') ? p.price : null };
+            });
+          }
+          setCart(pre);
+          setCustomerId(data.customerId || null);
+          setAssignedToId(data.assignedToId || null);
+          setEditingOrderId(data.id || null);
+          setEditingOrderStatus(data.status || null);
+          // fetch freshest version from server to make sure totals/unitPrice are those persisted server-side
+          try {
+            const rFresh = await fetch(`${API_URL}/orders/${data.id}`, { headers: { Authorization: `Bearer ${token}` } });
+            console.debug('NewOrderScreen: fetched fresh order after save/update status', rFresh.status, 'id', data.id);
+            if (rFresh.ok) {
+              const fresh = await rFresh.json();
+              console.debug('NewOrderScreen: fresh order total from server', fresh.total, 'id', fresh.id);
+              const preFresh = (fresh.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
+              setCart(preFresh);
+              setCustomerId(fresh.customerId || null);
+              setAssignedToId(fresh.assignedToId || null);
+              setEditingOrderId(fresh.id || null);
+              setEditingOrderStatus(fresh.status || null);
+            }
+          } catch (e) { console.debug('NewOrderScreen: error fetching fresh after save/update', e); }
+        } else {
+          // If server didn't return an id (unexpected), keep local cart as-is — don't clear it.
+        }
         setTimeout(() => {
           try {
             navigation.getParent()?.navigate('MainTabs', { screen: 'Ordini' });
@@ -110,7 +207,8 @@ export default function NewOrderScreen({ navigation }) {
   const total = cart.reduce((sum, it) => {
     const qty = Number(it.quantity) || 0;
     const p = products.find(pp => pp.id === it.productId) || { price: 0 };
-    return sum + (p.price || 0) * qty;
+    const unit = (typeof it.unitPrice === 'number') ? it.unitPrice : (p.price || 0);
+    return sum + unit * qty;
   }, 0);
 
   const [cartExpanded, setCartExpanded] = useState(false);
@@ -266,18 +364,62 @@ export default function NewOrderScreen({ navigation }) {
                 <View style={{ flexDirection: 'row' }}>
                   <Button mode="outlined" onPress={async () => {
                     // Save as draft: send status: 'draft'
-                    const itemsPayload = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0 })).filter(i => i.quantity > 0);
+                    const itemsPayload = cart.map(c => ({ productId: c.productId, quantity: Number(c.quantity) || 0, unitPrice: (typeof c.unitPrice === 'number') ? c.unitPrice : (products.find(p => p.id === c.productId)?.price || null) })).filter(i => i.quantity > 0);
                     if (itemsPayload.length === 0) { setToast({ visible: true, message: 'Carrello vuoto o quantità non valide', type: 'error' }); return; }
                     try {
-                      const payload = { items: itemsPayload, status: 'draft' };
+                      const payloadTotal = itemsPayload.reduce((s, it) => s + ((typeof it.unitPrice === 'number' ? it.unitPrice : 0) * it.quantity), 0);
+                      const payload = { items: itemsPayload, total: payloadTotal, status: 'draft' };
                       if (user?.role === 'admin' && assignedToId) payload.assignedToId = assignedToId;
                       if (user?.role === 'admin' && customerId) payload.customerId = customerId;
-                      const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+                          let res;
+                          if (editingOrderId) {
+                            // update existing order draft
+                            const upd = { ...payload };
+                            // ensure status: 'draft'
+                            upd.status = 'draft';
+                            res = await fetch(`${API_URL}/orders/${editingOrderId}`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(upd) });
+                          } else {
+                            res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+                          }
                       const data = await res.json();
                       if (res.ok) {
                         setToast({ visible: true, message: 'Bozza salvata', type: 'success' });
                         try { triggerRefresh(); } catch (e) { }
-                        setCart([]);
+                        // Prefer syncing local cart from server response if present (keeps unitPrice).
+                        // Otherwise reconstruct from the payload we just sent so totals update immediately.
+                        if (data && data.id) {
+                          const serverItems2 = (data.items || []);
+                          let pre2;
+                          if (serverItems2.length) {
+                            pre2 = serverItems2.map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
+                          } else {
+                            pre2 = itemsPayload.map(i => {
+                              const p = products.find(pp => pp.id === i.productId) || {};
+                              return { productId: i.productId, quantity: i.quantity, unitPrice: (typeof p.price === 'number') ? p.price : null };
+                            });
+                          }
+                          setCart(pre2);
+                          setCustomerId(data.customerId || null);
+                          setAssignedToId(data.assignedToId || null);
+                          setEditingOrderId(data.id || null);
+                          setEditingOrderStatus(data.status || null);
+                          // fetch freshest version from server to ensure detail shows updated total
+                          try {
+                            const rFresh2 = await fetch(`${API_URL}/orders/${data.id}`, { headers: { Authorization: `Bearer ${token}` } });
+                            console.debug('NewOrderScreen: fetch after save-draft status', rFresh2.status);
+                            if (rFresh2.ok) {
+                              const fresh2 = await rFresh2.json();
+                              const preFresh2 = (fresh2.items || []).map(i => ({ productId: i.productId, quantity: i.quantity, unitPrice: (typeof i.unitPrice === 'number') ? i.unitPrice : null }));
+                              setCart(preFresh2);
+                              setCustomerId(fresh2.customerId || null);
+                              setAssignedToId(fresh2.assignedToId || null);
+                              setEditingOrderId(fresh2.id || null);
+                              setEditingOrderStatus(fresh2.status || null);
+                            }
+                          } catch (e) { console.debug('NewOrderScreen: error fetching fresh after save-draft', e); }
+                        } else {
+                          // keep existing cart if server didn't return an id
+                        }
                         setCartExpanded(false);
                         setTimeout(() => { navigation.goBack(); }, 600);
                       } else {
