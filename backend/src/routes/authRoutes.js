@@ -2,6 +2,7 @@ import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
+import { sendMail } from '../utils/mailer.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -49,6 +50,57 @@ router.post("/login", async (req, res) => {
     refreshToken,
     user: { id: user.id, name: user.name, role: user.role, isActive: user.isActive }
   });
+});
+
+// POST /api/auth/request-reset - request a password reset email
+router.post('/request-reset', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email mancante' });
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.status(200).json({ ok: true }); // do not reveal existence
+
+    // create a short lived token for reset
+  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  // deep link scheme for mobile apps (will open the app if registered), and a web fallback
+  const deepLink = `${process.env.FRONTEND_DEEPLINK || 'gestionexus://reset-password'}?token=${token}`;
+  const webLink = `${process.env.FRONTEND_URL || 'http://localhost:19006'}/reset-password?token=${token}`;
+    try {
+  const tpl = await import('../utils/emailTemplates.js');
+  const mail = tpl.resetRequestTemplate(user, { token, deepLink, webLink });
+  await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from });
+    } catch (e) { console.error('Reset request template error', e); }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Request reset error', e);
+    res.status(500).json({ error: 'Errore server' });
+  }
+});
+
+// POST /api/auth/reset - perform password reset with token
+router.post('/reset', async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) return res.status(400).json({ error: 'Token e nuova password richiesti' });
+  if (typeof newPassword !== 'string' || newPassword.length < 8) return res.status(400).json({ error: 'newPassword must be at least 8 chars' });
+  try {
+    jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
+      if (err) return res.status(400).json({ error: 'Token non valido o scaduto' });
+      const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+      if (!user) return res.status(404).json({ error: 'Utente non trovato' });
+      const hashed = await bcrypt.hash(newPassword, 10);
+      await prisma.user.update({ where: { id: user.id }, data: { password: hashed } });
+      // send notification email
+      try {
+        const tpl = await import('../utils/emailTemplates.js');
+        const mail = tpl.passwordChangedTemplate(user);
+        await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from });
+      } catch (e) { console.error('Mail after reset failed', e); }
+      res.json({ ok: true });
+    });
+  } catch (e) {
+    console.error('Reset error', e);
+    res.status(500).json({ error: 'Errore server' });
+  }
 });
 
 // POST /api/auth/refresh - exchange refresh token for a new access token

@@ -12,6 +12,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "scheme": "gestionexus",
     "ios": {
       "supportsTablet": true
     },

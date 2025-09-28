@@ -14,6 +14,7 @@ import GlobalLoadingOverlay from "./src/components/GlobalLoadingOverlay";
 
 // Schermate
 import LoginScreen from "./src/screens/LoginScreen";
+import ResetPasswordScreen from "./src/screens/ResetPasswordScreen";
 import DashboardScreen from "./src/screens/DashboardScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import UsersScreen from "./src/screens/UsersScreen";
@@ -89,6 +90,7 @@ function RootNavigator() {
     return (
       <Stack.Navigator>
         <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ title: 'Reset password' }} />
       </Stack.Navigator>
     );
   }
@@ -97,7 +99,8 @@ function RootNavigator() {
   const Tabs = user.role === 'admin' ? AdminTabs : user.role === 'employee' ? EmployeeTabs : CustomerTabs;
 
   return (
-    <Stack.Navigator>
+    <Stack.Navigator initialRouteName="MainTabs">
+      <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ title: 'Reset password' }} />
       <Stack.Screen name="MainTabs" component={Tabs} options={{ headerShown: false }} />
       <Stack.Screen name="NewOrder" component={require('./src/screens/NewOrderScreen').default} options={{ title: 'Nuovo ordine' }} />
     </Stack.Navigator>

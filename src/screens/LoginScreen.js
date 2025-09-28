@@ -5,6 +5,7 @@ import FloatingToast from "../components/FloatingToast";
 import { AuthContext } from "../context/AuthContext";
 import { API_URL, MIN_LOGIN_SPINNER_MS } from "../config";
 import { ActivityIndicator } from "react-native-paper";
+import { Portal, Dialog } from 'react-native-paper';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -13,6 +14,8 @@ export default function LoginScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const [toastType, setToastType] = useState("error");
+  const [forgotVisible, setForgotVisible] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
 
   const { login, setAuthProcessing } = useContext(AuthContext);
 
@@ -97,6 +100,20 @@ export default function LoginScreen() {
     }
   };
 
+  const handleForgot = async () => {
+    if (!forgotEmail) {
+      setToastMsg('Inserisci l\'email'); setToastType('error'); setToastVisible(true); return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/auth/request-reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: forgotEmail }) });
+      if (res.ok) {
+        setToastMsg('Se l\'email esiste, riceverai le istruzioni.'); setToastType('success'); setToastVisible(true); setForgotVisible(false); setForgotEmail('');
+      } else {
+        const b = await res.json().catch(() => ({})); setToastMsg(b.error || 'Errore'); setToastType('error'); setToastVisible(true);
+      }
+    } catch (e) { console.error('Forgot error', e); setToastMsg('Impossibile contattare il server'); setToastType('error'); setToastVisible(true); }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Accedi</Text>
@@ -117,6 +134,8 @@ export default function LoginScreen() {
         mode="outlined"
         style={styles.input}
       />
+
+      <Button onPress={() => setForgotVisible(true)} mode="text">Hai dimenticato la password?</Button>
 
       <Button
         mode="contained"
@@ -142,6 +161,19 @@ export default function LoginScreen() {
         type={toastType}
         onHide={() => setToastVisible(false)}
       />
+
+      <Portal>
+        <Dialog visible={forgotVisible} onDismiss={() => setForgotVisible(false)}>
+          <Dialog.Title>Reset password</Dialog.Title>
+          <Dialog.Content>
+            <TextInput label="Email" value={forgotEmail} onChangeText={setForgotEmail} keyboardType="email-address" />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setForgotVisible(false)}>Annulla</Button>
+            <Button onPress={handleForgot}>Invia</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }

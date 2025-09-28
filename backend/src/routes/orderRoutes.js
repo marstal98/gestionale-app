@@ -7,6 +7,20 @@ const router = express.Router()
 const prisma = new PrismaClient()
 console.log('[orderRoutes] module loaded')
 
+// Helper: send notifications when an order becomes active (pending or in_progress)
+async function sendOrderNotificationsIfActive(orderId, reason = 'status_change', force = false) {
+  // Email notifications for orders have been disabled per configuration.
+  // We keep this helper in place so callers remain valid but it only logs the event.
+  try {
+    const orderFull = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true, customer: true, assignedTo: true, createdBy: true } });
+    if (!orderFull) return;
+    logApp('order.email_disabled', { orderId: orderFull.id, reason, status: orderFull.status, force: !!force });
+    return;
+  } catch (e) {
+    console.error('Error in sendOrderNotificationsIfActive (emails disabled)', e);
+  }
+}
+
 // Reuse include for queries
 const ORDER_INCLUDE = {
   include: {
@@ -99,11 +113,53 @@ router.put('/:id/assign', authenticateToken, async (req, res) => {
       const assignee = await prisma.user.findUnique({ where: { id: parseInt(assignedToId) } }); if (!assignee) return res.status(400).json({ error: 'Utente assegnato non trovato' });
       if (!['employee','admin'].includes(String(assignee.role))) return res.status(400).json({ error: 'Assegnatario deve essere un dipendente (employee) o admin' });
     }
-    const newData = { assignedToId: assignedToId ? parseInt(assignedToId) : null };
-    if (assignedToId) newData.status = 'in_progress'; else if (order.status !== 'completed' && order.status !== 'cancelled') newData.status = 'pending';
+  const parsedAssignedTo = assignedToId ? parseInt(assignedToId) : null;
+  const newData = { assignedToId: parsedAssignedTo };
+  // If assigned, ensure status becomes in_progress, otherwise fallback to pending unless final
+  if (parsedAssignedTo) newData.status = 'in_progress'; else if (order.status !== 'completed' && order.status !== 'cancelled') newData.status = 'pending';
+    const prevAssigneeId = order.assignedToId;
     const updated = await prisma.order.update({ where: { id: order.id }, data: newData });
     try { logAudit('assign', 'order', updated.id, req.user || {}, { assignedToId: updated.assignedToId || null }); } catch (e) { console.error('Audit log error', e); }
     logApp('order.assign', { orderId: updated.id, by: req.user?.id || null, assignedToId: updated.assignedToId || null });
+    // Send notifications: new assignee, previous assignee (if removed), and the admin who assigned
+    (async () => {
+      try {
+        const tpl = await import('../utils/emailTemplates.js');
+        // fetch updated with includes to get emails
+        const orderFull = await prisma.order.findUnique({ where: { id: updated.id }, include: { assignedTo: true, customer: true, createdBy: true } });
+        const summary = `Ordine #${orderFull.id} - Totale: ${orderFull.total}`;
+
+        // Emails disabled: would notify new assignee here
+        if (orderFull.assignedTo && orderFull.assignedTo.email) {
+          logApp('order.email_skipped.assignee', { orderId: orderFull.id, assigneeEmail: orderFull.assignedTo.email, reason: 'assign_handler' });
+        }
+
+        // If the previous assignee existed and now changed, notify previous assignee only on reassignment (not on removal)
+        if (prevAssigneeId && updated.assignedToId && prevAssigneeId !== updated.assignedToId) {
+          try {
+            const prev = await prisma.user.findUnique({ where: { id: prevAssigneeId } });
+            if (prev && prev.email) {
+              logApp('order.email_skipped.prev_assignee', { orderId: orderFull.id, prevAssigneeEmail: prev.email, reason: 'reassign_handler' });
+            }
+          } catch (e) { console.error('Lookup prev assignee failed', e); }
+        }
+
+        // Notify admin who performed the assignment (if they have email and different from assignee)
+        try {
+          const admin = await prisma.user.findUnique({ where: { id: req.user.id } });
+            if (admin && admin.email && admin.email !== (orderFull.assignedTo?.email || '')) {
+              logApp('order.email_skipped.admin_on_assign', { orderId: orderFull.id, adminEmail: admin.email, reason: 'assign_handler' });
+            }
+        } catch (e) { console.error('Admin lookup for assign failed', e); }
+
+  // Ensure canonical notifications for order when it becomes active due to assign (emails disabled)
+  try { await sendOrderNotificationsIfActive(orderFull.id, 'assign', !!req.body.sendEmail); } catch (e) { console.error('Notify after assign failed (emails disabled)', e); }
+
+      } catch (e) {
+        console.error('Error sending assignment notifications', e);
+      }
+    })();
+
     res.json({ ok: true, assignedToId: updated.assignedToId || null });
   } catch (err) { console.error('Assign order error', err); if (err && err.status && err.message) return res.status(err.status).json({ error: err.message }); res.status(500).json({ error: 'Errore assegnazione ordine' }); }
 });
@@ -116,19 +172,36 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
   try {
     const order = await prisma.order.findUnique({ where: { id: parseInt(id) }, include: { items: true } }); if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
     if (order.status === 'completed') return res.status(400).json({ error: "Ordine completato. Non è possibile modificare lo stato." });
+    // compute targetStatus: if client requests 'pending' but order is draft and there is an assignee (existing or in-payload), consider it in_progress
+    let targetStatus = status;
+    const payloadAssigned = typeof req.body.assignedToId !== 'undefined' && req.body.assignedToId ? parseInt(req.body.assignedToId) : null;
+    const hasAssignee = !!(order.assignedToId || payloadAssigned);
+    if (status === 'pending' && order.status === 'draft' && hasAssignee) {
+      targetStatus = 'in_progress';
+    }
+
     if (user.role === 'customer') {
       if (user.id !== order.customerId) return res.status(403).json({ error: 'Accesso negato' });
-      if (status === 'pending' && order.status !== 'draft') return res.status(400).json({ error: 'Transizione non permessa' });
-      if (status === 'cancelled' && (order.status === 'cancelled' || order.status === 'completed')) return res.status(400).json({ error: 'Ordine già in stato finale' });
+      // allow customer to move draft -> pending; also allow draft -> in_progress when an assignee exists
+      if (targetStatus === 'pending' && order.status !== 'draft') return res.status(400).json({ error: 'Transizione non permessa' });
+      if (targetStatus === 'in_progress') {
+        // permit only when moving from draft and there is an assignee
+        if (!(order.status === 'draft' && order.assignedToId)) return res.status(400).json({ error: 'Transizione non permessa' });
+      }
+      if (targetStatus === 'cancelled' && (order.status === 'cancelled' || order.status === 'completed')) return res.status(400).json({ error: 'Ordine già in stato finale' });
     }
+
     if (user.role === 'employee') {
-      if (status === 'in_progress') { if (order.assignedToId !== user.id) return res.status(403).json({ error: 'Devi essere assegnato a questo ordine per prenderlo in carico' }); if (order.status !== 'pending') return res.status(400).json({ error: 'Transizione non permessa' }); }
-      else if (status === 'completed') { if (order.assignedToId !== user.id) return res.status(403).json({ error: 'Devi essere assegnato a questo ordine per completarlo' }); if (order.status !== 'in_progress') return res.status(400).json({ error: 'Transizione non permessa' }); }
+      if (targetStatus === 'in_progress') { if (order.assignedToId !== user.id) return res.status(403).json({ error: 'Devi essere assegnato a questo ordine per prenderlo in carico' }); if (order.status !== 'pending') return res.status(400).json({ error: 'Transizione non permessa' }); }
+      else if (targetStatus === 'completed') { if (order.assignedToId !== user.id) return res.status(403).json({ error: 'Devi essere assegnato a questo ordine per completarlo' }); if (order.status !== 'in_progress') return res.status(400).json({ error: 'Transizione non permessa' }); }
       else return res.status(403).json({ error: 'Permessi insufficienti' });
     }
-    const updated = await prisma.order.update({ where: { id: order.id }, data: { status } });
+  const updated = await prisma.order.update({ where: { id: order.id }, data: { status: targetStatus } });
     try { logAudit('status_change', 'order', updated.id, req.user || {}, { from: order.status, to: status }); } catch (e) { console.error('Audit log error', e); }
     logApp('order.status_change', { orderId: updated.id, by: req.user?.id || null, from: order.status, to: status });
+    // Send notifications about status change (centralized helper). Allow force via sendEmail flag in payload
+    try { await sendOrderNotificationsIfActive(updated.id, 'status_change', !!req.body.sendEmail); } catch (e) { console.error('Notify after status change failed', e); }
+
     res.json({ ok: true, status: updated.status });
   } catch (err) { console.error('Change status error', err); res.status(500).json({ error: 'Errore cambio stato ordine' }); }
 });
@@ -194,6 +267,18 @@ router.post('/', authenticateToken, async (req, res) => {
 
   try { logAudit('create', 'order', result.id, req.user || {}, { total: result.total, items: result.items.length }); } catch (e) { console.error('Audit log error', e); }
   logApp('order.create', { orderId: result.id, by: req.user?.id || null, items: result.items.length });
+    // send emails if not draft
+    if (result.status !== 'draft') {
+      // fetch full order with relations to ensure emails are available
+      const orderFull = await prisma.order.findUnique({ where: { id: result.id }, include: { items: true, customer: true, assignedTo: true, createdBy: true } });
+      const summary = `Ordine #${orderFull.id} creato. Totale: ${orderFull.total}. Items: ${orderFull.items.length}`;
+      // Emails disabled: would notify customer/assignee/admins here
+      logApp('order.email_skipped.create', { orderId: orderFull.id, status: orderFull.status, hasCustomerEmail: !!orderFull.customer?.email, hasAssigneeEmail: !!orderFull.assignedTo?.email });
+    }
+    // canonical notifications for created active orders (emails disabled)
+    if (result.status !== 'draft') {
+      try { await sendOrderNotificationsIfActive(result.id, 'create'); } catch (e) { console.error('Notify after create failed (emails disabled)', e); }
+    }
     res.status(201).json(result);
   } catch (err) {
     console.error('Order creation error:', err && err.stack ? err.stack : err);
@@ -242,7 +327,13 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
 
     // Handle status transitions: if requestedStatus moves from draft -> pending/in_progress we must reserve stock
     const fromStatus = order.status;
-    const toStatus = requestedStatus || order.status;
+    let toStatus = requestedStatus || order.status;
+    // If publishing a draft and an assignedToId is present (either via payload or existing), prefer in_progress
+    const parsedAssigned = (typeof assignedToId !== 'undefined' && assignedToId) ? parseInt(assignedToId) : null;
+    const willBeAssigned = !!(parsedAssigned || order.assignedToId);
+    if (fromStatus === 'draft' && toStatus !== 'draft' && willBeAssigned) {
+      toStatus = 'in_progress';
+    }
 
     // Transaction: remove existing items and recreate if items changed, optionally reserve stock
     const result = await prisma.$transaction(async (tx) => {
@@ -272,8 +363,8 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
           updateData.total = newTotal;
         }
 
-      // Update status if requested
-      if (requestedStatus) updateData.status = requestedStatus;
+  // Update status if requested (use computed toStatus)
+  if (requestedStatus) updateData.status = toStatus;
       // If admin assigned and status not draft, ensure in_progress
       if (updateData.assignedToId && updateData.status !== 'draft') updateData.status = 'in_progress';
 
@@ -291,6 +382,11 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
 
     try { logAudit('update', 'order', result.id, req.user || {}, { from: fromStatus, to: requestedStatus || fromStatus }); } catch (e) { console.error('Audit log error', e); }
     logApp('order.update', { orderId: result.id, by: req.user?.id || null });
+    // If we moved from draft to active, call helper (emails disabled)
+    if (fromStatus === 'draft' && (result.status !== 'draft')) {
+      try { await sendOrderNotificationsIfActive(result.id, 'draft_publish'); } catch (e) { console.error('Notify after draft publish failed (emails disabled)', e); }
+    }
+
     res.json(result);
   } catch (err) {
     console.error('Order update error', err);

@@ -48,6 +48,14 @@ app.all('/debug-method', (req, res) => {
 
 // Rotte
 app.use("/api/auth", authRoutes);
+// Debugging middleware for /api/users to capture incoming requests and help diagnose Not Found
+app.use('/api/users', (req, res, next) => {
+	try {
+		console.log('[USERS-REQ]', req.method, req.originalUrl, 'headers:', JSON.stringify(req.headers));
+		if (req.rawBody) console.log('[USERS-REQ] rawBody:', req.rawBody);
+	} catch (e) { console.error('USERS-REQ log error', e); }
+	next();
+});
 app.use("/api/users", userRoutes);
 app.use("/api/products", productRoutes);
 // Debug: log incoming requests to orders to help troubleshoot 404s
