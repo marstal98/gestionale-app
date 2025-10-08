@@ -55,3 +55,11 @@ backend.bak.*
 
 # Local DB files
 dev.db
+
+# Test coverage
+coverage/
+*.lcov
+
+# CI/CD builds
+dist/
+build/

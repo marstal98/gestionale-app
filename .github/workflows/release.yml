@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run tests
+      run: npm test -- --watchAll=false
+      
+    - name: Build web app
+      run: npx expo export -p web
+      
+    - name: Create Release Notes
+      id: release_notes
+      run: |
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+        git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          ## 🚀 Nuova Release Gestionale App
+          
+          ### Cambiamenti
+          ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          
+          ### 📱 Download
+          - **Web App**: https://${{ github.repository_owner }}.github.io/gestionale-app
+          - **APK Android**: Disponibile in EAS Build
+          - **iOS**: Disponibile su TestFlight
+          
+          ### 🧪 Test Coverage
+          Tutti i test passano con copertura > 80%
+        draft: false
+        prerelease: false

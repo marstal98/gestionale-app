@@ -1,0 +1,63 @@
+name: Pull Request Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  pr-check:
+    name: PR Quality Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout PR
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run tests with coverage
+      run: npm test -- --coverage --watchAll=false
+      
+    - name: Test build
+      run: npx expo export -p web --clear
+      
+    - name: Comment PR with results
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const { execSync } = require('child_process');
+          const coverage = require('./coverage/coverage-summary.json');
+          
+          const comment = `
+          ## 🧪 Test Results
+          
+          ✅ All tests passed!
+          
+          ### Coverage Report
+          - **Statements**: ${coverage.total.statements.pct}%
+          - **Branches**: ${coverage.total.branches.pct}%
+          - **Functions**: ${coverage.total.functions.pct}%
+          - **Lines**: ${coverage.total.lines.pct}%
+          
+          ### Build Status
+          ✅ Web build successful
+          
+          Ready to merge! 🚀
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+      continue-on-error: true
