@@ -16,3 +16,7 @@ export const API_URL = __DEV__
 
 // Durata minima (ms) dello spinner di login
 export const MIN_LOGIN_SPINNER_MS = 3000;
+
+// If you are the super admin, set your email here so the app can show the special
+// SuperAdmin-only tab (e.g. requests management). Replace with your email.
+export const SUPERADMIN_EMAIL = 'marcostallone.developer@gmail.com';

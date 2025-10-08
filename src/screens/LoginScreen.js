@@ -1,23 +1,40 @@
-import React, { useState, useContext } from "react";
-import { View, StyleSheet, Animated } from "react-native";
-import { TextInput, Button, Text } from "react-native-paper";
-import FloatingToast from "../components/FloatingToast";
+import React, { useState, useContext, useCallback } from "react";
+import { View, StyleSheet, Animated, TouchableOpacity } from "react-native";
+import { TextInput, Button, Text, IconButton, Portal, Dialog, Paragraph, ActivityIndicator } from "react-native-paper";
+import RequiredTextInput from '../components/RequiredTextInput';
+import { showToast } from '../utils/toastService';
 import { AuthContext } from "../context/AuthContext";
 import { API_URL, MIN_LOGIN_SPINNER_MS } from "../config";
-import { ActivityIndicator } from "react-native-paper";
-import { Portal, Dialog } from 'react-native-paper';
+// consolidated imports above
+import { useDeepLinkHandler, parseTokenFromUrl } from '../components/DeepLinkHandler';
+import { safeMessageFromData } from '../utils/errorUtils';
+import PasswordInput from '../components/PasswordInput';
 
-export default function LoginScreen() {
+export default function LoginScreen({ navigation, route }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [toastVisible, setToastVisible] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
-  const [toastType, setToastType] = useState("error");
   const [forgotVisible, setForgotVisible] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
+  const [helpVisible, setHelpVisible] = useState(false);
 
   const { login, setAuthProcessing } = useContext(AuthContext);
+
+  // deep link handler: if app opened with gestionexus://accept-invite?token=... navigate
+  const handleLink = useCallback((url) => {
+    try {
+      const token = parseTokenFromUrl(url);
+      if (token) {
+        // navigate to AcceptInvite and pass token
+        // we use navigation by exposing it via props? LoginScreen is a direct stack screen and receives navigation implicitly
+        navigation.navigate('AcceptInvite', { token });
+      }
+    } catch (e) {
+      console.warn('Deep link parse error', e);
+    }
+  }, [navigation]);
+
+  useDeepLinkHandler(handleLink);
 
   const handleLogin = async () => {
   const minDuration = MIN_LOGIN_SPINNER_MS; // ms
@@ -25,16 +42,12 @@ export default function LoginScreen() {
     // Validazioni client-side
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || !emailRegex.test(email)) {
-      setToastMsg("Inserisci un'email valida");
-      setToastType("error");
-      setToastVisible(true);
+      showToast("Inserisci un'email valida", 'error');
       return;
     }
 
     if (!password || password.length < 8) {
-      setToastMsg("La password deve avere almeno 8 caratteri");
-      setToastType("error");
-      setToastVisible(true);
+      showToast("La password deve avere almeno 8 caratteri", 'error');
       return;
     }
 
@@ -62,9 +75,8 @@ export default function LoginScreen() {
         if (elapsed < minDuration) {
           await new Promise((r) => setTimeout(r, minDuration - elapsed));
         }
-        setToastMsg(data.error || "Credenziali non valide");
-        setToastType("error");
-        setToastVisible(true);
+        const safe = safeMessageFromData(data, "Credenziali non valide");
+        showToast(safe, 'error');
         return;
       }
 
@@ -77,11 +89,12 @@ export default function LoginScreen() {
       // Ensure we await login but also guard against unexpected errors
       try {
         await login(data);
+        // If came from a deep-link wanting to open AdminAccessRequests, and user is admin
+        // after successful login, let the app show the default tabs (Home) —
+        // deep-link handling will route to Richieste if appropriate when the app is opened via link.
       } catch (innerErr) {
         console.error("Errore durante login():", innerErr);
-        setToastMsg("Errore interno durante l'accesso");
-        setToastType("error");
-        setToastVisible(true);
+        showToast("Errore interno durante l'accesso", 'error');
       }
 
     } catch (err) {
@@ -90,9 +103,7 @@ export default function LoginScreen() {
       if (elapsedErr < minDuration) {
         await new Promise((r) => setTimeout(r, minDuration - elapsedErr));
       }
-      setToastMsg("Impossibile connettersi al server");
-      setToastType("error");
-      setToastVisible(true);
+      showToast("Impossibile connettersi al server", 'error');
     } finally {
       // Always clear loading/authProcessing in a finally block
       setLoading(false);
@@ -102,40 +113,44 @@ export default function LoginScreen() {
 
   const handleForgot = async () => {
     if (!forgotEmail) {
-      setToastMsg('Inserisci l\'email'); setToastType('error'); setToastVisible(true); return;
+      showToast('Inserisci l\'email', 'error'); return;
     }
     try {
       const res = await fetch(`${API_URL}/auth/request-reset`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: forgotEmail }) });
       if (res.ok) {
-        setToastMsg('Se l\'email esiste, riceverai le istruzioni.'); setToastType('success'); setToastVisible(true); setForgotVisible(false); setForgotEmail('');
+        showToast('Se l\'email esiste, riceverai le istruzioni.', 'success'); setForgotVisible(false); setForgotEmail('');
       } else {
-        const b = await res.json().catch(() => ({})); setToastMsg(b.error || 'Errore'); setToastType('error'); setToastVisible(true);
+        const b = await res.json().catch(() => ({}));
+        const safe = safeMessageFromData(b || {}, 'Errore');
+        showToast(safe, 'error');
       }
-    } catch (e) { console.error('Forgot error', e); setToastMsg('Impossibile contattare il server'); setToastType('error'); setToastVisible(true); }
+  } catch (e) { console.error('Forgot error', e); showToast('Impossibile contattare il server', 'error'); }
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Accedi</Text>
 
-      <TextInput
+      <RequiredTextInput
         label="Email"
+        name="Email"
+        required
         value={email}
         onChangeText={setEmail}
         mode="outlined"
         style={styles.input}
       />
 
-      <TextInput
-        label="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        mode="outlined"
-        style={styles.input}
-      />
+      <PasswordInput label="Password" value={password} onChangeText={setPassword} required style={styles.input} />
 
-      <Button onPress={() => setForgotVisible(true)} mode="text">Hai dimenticato la password?</Button>
+  <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }}>
+    <Button onPress={() => setForgotVisible(true)} mode="text">Hai dimenticato la password?</Button>
+    <View style={{ width: 12 }} />
+    <Button onPress={() => navigation.navigate('RequestAccess')} mode="text">Richiedi accesso</Button>
+    <TouchableOpacity accessibilityLabel="Spiegazione modalità accesso" onPress={() => setHelpVisible(true)} style={{ marginLeft: 6 }}>
+      <IconButton icon="help-circle-outline" size={22} color="#7E57C2" accessibilityLabel="Aiuto accesso" />
+    </TouchableOpacity>
+  </View>
 
       <Button
         mode="contained"
@@ -155,22 +170,31 @@ export default function LoginScreen() {
           </View>
         </Animated.View>
       )}
-      <FloatingToast
-        visible={toastVisible}
-        message={toastMsg}
-        type={toastType}
-        onHide={() => setToastVisible(false)}
-      />
+      {/* Global toast host handles toasts */}
 
       <Portal>
         <Dialog visible={forgotVisible} onDismiss={() => setForgotVisible(false)}>
           <Dialog.Title>Reset password</Dialog.Title>
           <Dialog.Content>
-            <TextInput label="Email" value={forgotEmail} onChangeText={setForgotEmail} keyboardType="email-address" />
+            <RequiredTextInput label="Email" name="Email" required value={forgotEmail} onChangeText={setForgotEmail} keyboardType="email-address" onInvalid={(n) => { showToast(`Campo ${n} obbligatorio`, 'error'); }} />
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setForgotVisible(false)}>Annulla</Button>
             <Button onPress={handleForgot}>Invia</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog visible={helpVisible} onDismiss={() => setHelpVisible(false)} style={{ padding: 8 }}>
+          <Dialog.Title style={{ fontSize: 20, fontWeight: '700' }}>Come funziona l'accesso</Dialog.Title>
+          <Dialog.Content>
+            <Paragraph style={{ marginBottom: 8 }}>Questa applicazione è usata dai clienti e dal personale interno. Non c'è un form di registrazione pubblico per motivi di sicurezza e per gestire gli accessi centralmente.</Paragraph>
+            <Paragraph style={{ fontWeight: '700', marginBottom: 6 }}>Modalità per ottenere le credenziali</Paragraph>
+            <Paragraph>1) Se lavori per un'azienda, chiedi all'amministratore della tua azienda di aggiungerti. Riceverai un invito via email con istruzioni.</Paragraph>
+            <Paragraph>2) Se non sei registrato, usa il pulsante "Richiedi accesso" per inviare una richiesta al team: ti risponderemo indicando come procedere.</Paragraph>
+            <Paragraph style={{ marginTop: 8, fontStyle: 'italic' }}>Inserisci qui l'email associata al tuo profilo (es. aziendale) e usa la password ricevuta o impostata tramite la procedura di reset.</Paragraph>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setHelpVisible(false)}>Chiudi</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

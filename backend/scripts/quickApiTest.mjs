@@ -9,10 +9,12 @@ import fetch from 'node-fetch';
     if(!login.ok) return;
     const token = JSON.parse(jb).token;
     const id = 16;
-    const g = await fetch(API+`/orders/${id}`,{headers:{Authorization:'Bearer '+token}});
+  const headers = {};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const g = await fetch(API+`/orders/${id}`,{headers});
     console.log('GET status', g.status);
     console.log(await g.text());
-    const del = await fetch(API+`/orders/${id}`,{method:'DELETE',headers:{Authorization:'Bearer '+token}});
+  const del = await fetch(API+`/orders/${id}`,{method:'DELETE',headers});
     console.log('DELETE status', del.status);
     console.log(await del.text());
   }catch(e){console.error(e);} 

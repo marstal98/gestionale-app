@@ -10,10 +10,28 @@ const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// GET /api/products
+// GET /api/products with ownership filtering
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const products = await prisma.product.findMany();
+    const user = req.user;
+    const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || '';
+
+    // superadmin sees all
+    if (user && user.email && user.email.toLowerCase() === (SUPERADMIN_EMAIL || '').toLowerCase()) {
+      const products = await prisma.product.findMany();
+      return res.json(products);
+    }
+
+    // find direct subordinates
+    const subs = await prisma.user.findMany({ where: { createdById: user.id }, select: { id: true } });
+    const subordinateIds = subs.map(s => s.id);
+
+    // admins see their products + subordinates' products; other roles see only their own products
+    const whereClause = user.role === 'admin'
+      ? { OR: [{ createdById: user.id }, { createdById: { in: subordinateIds } }] }
+      : { createdById: user.id };
+
+    const products = await prisma.product.findMany({ where: whereClause });
     res.json(products);
   } catch (err) {
     console.error(err);
@@ -26,7 +44,7 @@ router.post('/', authenticateToken, authorizeRole('admin'), async (req, res) => 
   const { name, sku, price, stock } = req.body;
   try {
     const roundedPrice = isNaN(parseFloat(price)) ? 0 : Math.round(parseFloat(price) * 100) / 100;
-    const p = await prisma.product.create({ data: { name, sku, price: roundedPrice, stock: parseInt(stock || 0) } });
+    const p = await prisma.product.create({ data: { name, sku, price: roundedPrice, stock: parseInt(stock || 0), createdById: req.user.id } });
     try { logAudit('create', 'product', p.id, req.user || {}, { name: p.name, sku: p.sku, price: p.price, stock: p.stock }); } catch (e) { console.error('Audit log error', e); }
     logApp('product.create', { productId: p.id, by: req.user?.id || null });
     res.status(201).json(p);

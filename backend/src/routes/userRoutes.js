@@ -3,21 +3,60 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcrypt";
 import { authenticateToken, authorizeRole } from "../middleware/auth.js";
 import { logApp, logAudit } from '../utils/logger.js';
+import { findExistingByEmail } from '../utils/emailChecks.js';
 import { sendMail } from '../utils/mailer.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// GET: lista utenti (solo admin)
-router.get("/", authenticateToken, authorizeRole("admin"), async (req, res) => {
+// GET: lista utenti — ogni utente vede se stesso e i suoi sottoposti (multi-level).
+router.get("/", authenticateToken, async (req, res) => {
   try {
+    const requester = req.user;
+    console.log('DEBUG GET /api/users - requester:', requester && { id: requester.id, role: requester.role, email: requester.email });
+    if (!requester) return res.status(401).json({ error: 'Not authenticated' });
+
+    // if superadmin (email check against frontend constant) allow all
+    const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || '';
+    if (requester && requester.email && requester.email.toLowerCase() === (SUPERADMIN_EMAIL || '').toLowerCase()) {
+      const users = await prisma.user.findMany({ select: { id: true, name: true, email: true, role: true, createdAt: true, isActive: true } });
+      return res.json(users);
+    }
+
+    // If customer: only themselves
+    if (requester.role === 'customer') {
+      const u = await prisma.user.findUnique({ where: { id: requester.id }, select: { id: true, name: true, email: true, role: true, createdAt: true, isActive: true } });
+      return res.json(u ? [u] : []);
+    }
+
+    // For admin and employee: collect recursive subordinates (multi-level)
+  console.log('DEBUG GET /api/users - collecting subordinates for requester id', requester.id);
+    const subordinateIds = [];
+    const queue = [requester.id];
+    while (queue.length) {
+      const parentId = queue.shift();
+      const children = await prisma.user.findMany({ where: { createdById: parentId }, select: { id: true } });
+      for (const c of children) {
+        if (!subordinateIds.includes(c.id) && c.id !== requester.id) {
+          subordinateIds.push(c.id);
+          queue.push(c.id);
+        }
+      }
+    }
+
+    // customers assigned to any subordinate employees
+    const assigned = subordinateIds.length ? await prisma.customerAssignment.findMany({ where: { employeeId: { in: subordinateIds } }, select: { customerId: true } }) : [];
+    const assignedCustomerIds = assigned.map(a => a.customerId);
+
     const users = await prisma.user.findMany({
+      where: { OR: [ { id: requester.id }, { id: { in: subordinateIds } }, { id: { in: assignedCustomerIds } } ] },
       select: { id: true, name: true, email: true, role: true, createdAt: true, isActive: true }
     });
-    res.json(users);
+    console.log('DEBUG GET /api/users - subordinateIds:', subordinateIds, 'assignedCustomerIds:', assignedCustomerIds);
+    return res.json(users);
   } catch (err) {
     console.error('GET /api/users error:', err);
-    res.status(500).json({ error: "Errore server" });
+    return res.status(500).json({ error: "Errore server" });
   }
 });
 
@@ -26,41 +65,56 @@ router.post("/", authenticateToken, authorizeRole("admin"), async (req, res) => 
   const { name, email, password, role } = req.body;
 
   try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = await prisma.user.create({
-      data: { name, email, password: hashedPassword, role }
-    });
-    // do not return password hash
-    const safe = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt, isActive: newUser.isActive };
-    // send welcome email (non-blocking)
+    // Prevent duplicate emails
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      const safeExisting = { id: existingUser.id, name: existingUser.name, email: existingUser.email, role: existingUser.role, isActive: existingUser.isActive };
+      return res.status(409).json({ error: 'Email esistente', existing: true, user: safeExisting });
+    }
+
+    // If admin provided a password explicitly, keep legacy behavior (for ops/CLI convenience)
+    if (password && typeof password === 'string' && password.length >= 8) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const newUser = await prisma.user.create({ data: { name, email, password: hashedPassword, role, createdById: req.user?.id || null } });
+      const safe = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt, isActive: newUser.isActive };
+      try { logAudit('create', 'user', newUser.id, req.user || {}, { name: newUser.name, email: newUser.email, role: newUser.role }); } catch (e) { console.error('Audit log error', e); }
+      logApp('user.create', { userId: newUser.id, by: req.user?.id || null });
+      res.json(safe);
+      return;
+    }
+
+    // Otherwise: create a disabled user and send an invitation to set password
+    const provisionalPassword = Math.random().toString(36).slice(2, 10) + '!'; // temporary hash
+    const hashed = await bcrypt.hash(provisionalPassword, 10);
+    const newUser = await prisma.user.create({ data: { name: name || '', email, password: hashed, role, isActive: false, createdById: req.user?.id || null } });
+
+    // create or reuse invitation token
+    const crypto = require('crypto');
+    const now = new Date();
+    let invitation = await prisma.invitation.findFirst({ where: { email, usedAt: null, expiresAt: { gt: now } } });
+    if (!invitation) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // 24h
+      invitation = await prisma.invitation.create({ data: { email, token, userId: newUser.id, createdById: req.user?.id || null, expiresAt } });
+    } else {
+      // link invitation to the newly created user
+      invitation = await prisma.invitation.update({ where: { id: invitation.id }, data: { userId: newUser.id, createdById: req.user?.id || null } });
+    }
+
+    // send invite email with the provisional temporary password (instructions to change it)
     try {
-      // send to new user using template
-      try {
-        const tpl = await import('../utils/emailTemplates.js');
-        const mail = tpl.welcomeTemplate(newUser);
-        sendMail({ to: newUser.email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from }).catch(e => console.error('Welcome mail failed', e));
-      } catch (e) { console.error('Welcome mail template error', e); }
-      // notify the admin who created the user (lookup email from DB because token may not contain it)
-      try {
-        if (req.user && req.user.id) {
-          const admin = await prisma.user.findUnique({ where: { id: req.user.id } });
-          const adminEmail = admin?.email;
-          const adminName = admin?.name || adminEmail;
-          if (adminEmail && adminEmail !== newUser.email) {
-            try {
-              const tpl = await import('../utils/emailTemplates.js');
-              const mail = tpl.adminNotifyNewUserTemplate({ name: adminName }, newUser);
-              sendMail({ to: adminEmail, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from }).catch(e => console.error('Notify admin mail failed', e));
-            } catch (e) { console.error('Admin notify template error', e); }
-          }
-        }
-      } catch (e) { console.error('Admin notify lookup failed', e); }
-    } catch (e) { console.error('Welcome mail error', e); }
+      const tpl = await import('../utils/emailTemplates.js');
+      const mail = tpl.inviteTemplate({ token: invitation.token, email }, { tempPassword: provisionalPassword });
+      sendMail({ to: email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from }).catch(e => console.error('Invite mail failed', e));
+    } catch (e) { console.error('Invite mail template error', e); }
+
     // audit log
-    try { logAudit('create', 'user', newUser.id, req.user || {}, { name: newUser.name, email: newUser.email, role: newUser.role }); } catch (e) { console.error('Audit log error', e); }
-    logApp('user.create', { userId: newUser.id, by: req.user?.id || null });
+    try { logAudit('create', 'user', newUser.id, req.user || {}, { name: newUser.name, email: newUser.email, role: newUser.role, invited: true }); } catch (e) { console.error('Audit log error', e); }
+    logApp('user.create.invited', { userId: newUser.id, by: req.user?.id || null });
+    const safe = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt, isActive: newUser.isActive };
     res.json(safe);
   } catch (err) {
+    console.error('Create user error', err);
     res.status(500).json({ error: "Errore creazione utente" });
   }
 });
@@ -72,6 +126,12 @@ router.put("/:id", authenticateToken, authorizeRole("admin"), async (req, res) =
 
   try {
     const updateData = { name, email, role };
+
+    // If email is being changed, ensure it doesn't collide with another user
+    if (email) {
+      const existing = await findExistingByEmail(email);
+      if (existing && existing.id !== parseInt(id)) return res.status(409).json({ error: 'Email esistente', existing: true, user: existing });
+    }
 
     if (password && password.trim() !== "") {
       updateData.password = await bcrypt.hash(password, 10);

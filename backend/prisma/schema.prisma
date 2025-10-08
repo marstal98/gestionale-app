@@ -16,21 +16,37 @@ datasource db {
 }
 
 model User {
-  id             Int      @id @default(autoincrement())
-  name           String
-  email          String   @unique
-  password       String // hash bcrypt
-  role           Role     @default(customer)
-  isActive       Boolean  @default(true)
+  id                    Int             @id @default(autoincrement())
+  name                  String
+  email                 String          @unique
+  password              String // hash bcrypt
+  role                  Role            @default(customer)
+  isActive              Boolean         @default(true)
+  // who created this user (nullable)
+  createdById           Int?
+  createdBy             User?           @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers          User[]          @relation("UserCreatedBy")
+  // products created by this user
+  productsCreated       Product[]       @relation("ProductCreatedBy")
   // orders assigned to this user (could be employee or customer)
-  assignedOrders Order[]  @relation("OrderAssignedTo")
+  assignedOrders        Order[]         @relation("OrderAssignedTo")
   // orders where this user is the customer
-  customerOrders Order[]  @relation("OrderCustomer")
+  customerOrders        Order[]         @relation("OrderCustomer")
   // orders created by this user (admin or customer creating on their behalf)
-  createdOrders  Order[]  @relation("OrderCreatedBy")
+  createdOrders         Order[]         @relation("OrderCreatedBy")
   // orders deleted by this user (soft-delete)
-  deletedOrders  Order[]  @relation("OrderDeletedBy")
-  createdAt      DateTime @default(now())
+  deletedOrders         Order[]         @relation("OrderDeletedBy")
+  // invitations received (user invited to join)
+  invitationsReceived   Invitation[]    @relation("InvitationUser")
+  // invitations created by this user (admin who invited)
+  invitationsCreated    Invitation[]    @relation("InvitationCreatedBy")
+  // access requests handled by this user (admin actions)
+  handledAccessRequests AccessRequest[] @relation("AccessRequestHandledBy")
+  // assignments: customers assigned to this user (when acting as employee)
+  customerAssignmentsAsEmployee CustomerAssignment[] @relation("EmployeeAssignments")
+  // assignments: employees assigned to this user (when acting as customer)
+  customerAssignmentsAsCustomer CustomerAssignment[] @relation("CustomerAssignments")
+  createdAt             DateTime        @default(now())
 }
 
 enum Role {
@@ -45,6 +61,9 @@ model Product {
   sku                String?             @unique
   price              Float
   stock              Int                 @default(0)
+  // who created this product
+  createdById        Int?
+  createdBy          User?               @relation("ProductCreatedBy", fields: [createdById], references: [id])
   createdAt          DateTime            @default(now())
   orderItems         OrderItem[]
   inventoryMovements InventoryMovement[]
@@ -97,4 +116,48 @@ model InventoryMovement {
   quantity  Int
   metadata  Json?
   createdAt DateTime @default(now())
+}
+
+// Assignments between customers and employees (many-to-many)
+model CustomerAssignment {
+  id         Int      @id @default(autoincrement())
+  customer   User     @relation("CustomerAssignments", fields: [customerId], references: [id])
+  customerId Int
+  employee   User     @relation("EmployeeAssignments", fields: [employeeId], references: [id])
+  employeeId Int
+  createdAt  DateTime @default(now())
+
+  @@unique([customerId, employeeId])
+  @@index([employeeId])
+  @@index([customerId])
+}
+
+// Requests coming from users who want access
+model AccessRequest {
+  id          Int       @id @default(autoincrement())
+  name        String
+  email       String
+  company     String?
+  message     String?
+  status      String    @default("pending") // pending|accepted|rejected
+  createdAt   DateTime  @default(now())
+  handledById Int?
+  handledBy   User?     @relation("AccessRequestHandledBy", fields: [handledById], references: [id])
+  handledAt   DateTime?
+}
+
+// Invitation tokens for onboarding (single-use)
+model Invitation {
+  id          Int       @id @default(autoincrement())
+  email       String
+  token       String    @unique
+  // the user account linked to this invitation (if already created)
+  user        User?     @relation("InvitationUser", fields: [userId], references: [id])
+  userId      Int?
+  createdById Int?
+  // the admin who created the invitation
+  createdBy   User?     @relation("InvitationCreatedBy", fields: [createdById], references: [id])
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
 }

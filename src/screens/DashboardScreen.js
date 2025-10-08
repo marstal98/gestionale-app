@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState, useLayoutEffect } from "react";
 import { View, StyleSheet, ScrollView } from "react-native";
 import { Text, IconButton, Button, useTheme } from "react-native-paper";
 import { AuthContext } from "../context/AuthContext";
+import { buildHeaders } from '../utils/api';
 import { SyncContext } from '../context/SyncContext';
 import StatCard from "../components/StatCard";
 import MiniBarChart from "../components/MiniBarChart";
@@ -27,9 +28,9 @@ export default function DashboardScreen({ navigation }) {
     const loadData = async () => {
       try {
         const [uRes, oRes, pRes] = await Promise.all([
-          fetch(`${API_URL}/users`, { headers: { Authorization: `Bearer ${token}` } }),
-          fetch(`${API_URL}/orders`, { headers: { Authorization: `Bearer ${token}` } }),
-          fetch(`${API_URL}/products`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${API_URL}/users`, { headers: buildHeaders(token) }),
+          fetch(`${API_URL}/orders`, { headers: buildHeaders(token) }),
+          fetch(`${API_URL}/products`, { headers: buildHeaders(token) }),
         ]);
 
         const uDataRaw = uRes.ok ? await uRes.json() : [];

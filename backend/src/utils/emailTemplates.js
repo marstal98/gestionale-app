@@ -25,19 +25,23 @@ export function passwordChangedTemplate(user) {
 export function resetRequestTemplate(user, payload) {
   // payload = { token, deepLink, webLink }
   const token = payload?.token || '';
-  const deepLink = payload?.deepLink || `${process.env.FRONTEND_DEEPLINK || 'gestionexus://reset-password'}?token=${token}`;
-  const webLink = payload?.webLink || `${process.env.FRONTEND_URL || 'http://localhost:19006'}/reset-password?token=${token}`;
+  // For privacy and security, do not include clickable external links in emails.
+  // Provide clear textual instructions and the token so the user can open the app
+  // or the web panel manually and paste the token when required.
 
   const subject = `${APP_NAME} - Richiesta reset password`;
-  const text = `Ciao ${user.name || ''},\n\nAbbiamo ricevuto una richiesta per resettare la password. Puoi aprire il link direttamente nell'app (se il tuo dispositivo lo supporta) o usare il link web di fallback:\n\nLink (apri in app): ${deepLink}\nLink (web fallback): ${webLink}\n\nSe il link non si apre, copia il seguente token e incollalo nella schermata 'Reset password' dell'app:\n\n${token}\n\nSe non hai richiesto questa operazione ignora questa email.`;
+  const text = `Ciao ${user.name || ''},\n\nAbbiamo ricevuto una richiesta per resettare la password. Per completare l'operazione segui questi passaggi:\n\n1) Apri l'app ${APP_NAME} sul tuo dispositivo.\n2) Vai su Login → Reset password (o Impostazioni → Reset password).\n3) Copia il token qui sotto e incollalo nel campo richiesto:\n\n${token}\n\nSe preferisci usare il pannello web, visita il pannello di gestione della tua azienda e cerca la sezione 'Reset password', quindi incolla lo stesso token.\n\nSe non hai richiesto questa operazione, ignora questa email.`;
 
   const html = `<p>Ciao ${user.name || ''},</p>
-    <p>Abbiamo ricevuto una richiesta per resettare la password. Puoi aprire il link direttamente nell'app (se il tuo dispositivo lo supporta) o usare il link web di fallback:</p>
-    <p><strong>Apri in app:</strong> <a href="${deepLink}">${deepLink}</a></p>
-    <p><strong>Link web (fallback):</strong> <a href="${webLink}">${webLink}</a></p>
-    <p>Se il link non si apre, copia il seguente token e incollalo nella schermata <em>Reset password</em> dell'app:</p>
+    <p>Abbiamo ricevuto una richiesta per resettare la password. Per completare l'operazione segui questi passaggi:</p>
+    <ol>
+      <li>Apri l'app <strong>${APP_NAME}</strong> sul tuo dispositivo.</li>
+      <li>Vai a <strong>Login → Reset password</strong> (o <strong>Impostazioni → Reset password</strong>).</li>
+      <li>Copia il token qui sotto e incollalo nel campo richiesto.</li>
+    </ol>
     <pre style="background:#f4f4f4;padding:10px;border-radius:6px;">${token}</pre>
-    <p>Se non hai richiesto questa operazione ignora questa email.</p>`;
+    <p>In alternativa, puoi accedere al pannello web della tua azienda e utilizzare la funzione <strong>Reset password</strong>, quindi incollare lo stesso token.</p>
+    <p>Se non hai richiesto questa operazione, ignora questa email.</p>`;
 
   return { subject, text, html, from: FROM };
 }
@@ -97,6 +101,25 @@ export function genericTestTemplate(user) {
   return { subject: `${APP_NAME} - Email di test`, text: `Ciao ${user.name || ''}, questa è una email di test inviata dal sistema.`, html: `<p>Ciao ${user.name || ''},</p><p>Questa è una email di test inviata dal sistema.</p>`, from: FROM };
 }
 
+export function inviteTemplate(invitation, payload = {}) {
+  // invitation = { token, email }
+  const tempPassword = payload?.tempPassword || '';
+  const subject = `${APP_NAME} - Invito ad accedere`;
+  const text = `Ciao,\n\nSei stato invitato ad accedere a ${APP_NAME}.\n\nPer accedere per la prima volta procedi così:\n\n1) Apri l'app ${APP_NAME} sul tuo dispositivo.\n2) Vai alla schermata Accedi.\n3) Inserisci la tua email: ${invitation.email}\n   Password temporanea: ${tempPassword}\n4) Dopo il primo accesso, vai su Impostazioni → Cambia password e imposta una nuova password personale (almeno 8 caratteri).\n\nSe non ti aspettavi questa email, ignora e contatta il supporto.`;
+  const html = `<p>Ciao,</p>\n    <p>Sei stato invitato ad accedere a <strong>${APP_NAME}</strong>.</p>\n    <p>Per accedere per la prima volta procedi così:</p>\n    <ol>\n      <li>Apri l'app <strong>${APP_NAME}</strong> sul tuo dispositivo.</li>\n      <li>Vai alla schermata <strong>Accedi</strong>.</li>\n      <li>Inserisci le seguenti credenziali temporanee:</li>\n    </ol>\n    <ul>\n      <li><strong>Email:</strong> ${invitation.email}</li>\n      <li><strong>Password temporanea:</strong> <code style="background:#f4f4f4;padding:4px 6px;border-radius:4px;">${tempPassword}</code></li>\n    </ul>\n    <p>Dopo il primo accesso, vai su <strong>Impostazioni → Cambia password</strong> ed imposta una nuova password personale (almeno 8 caratteri).</p>\n    <p>Se non ti aspettavi questa email, ignora e contatta il supporto.</p>`;
+  return { subject, text, html, from: FROM };
+}
+
+export function accessRequestNotifyTemplate(accessRequest, payload = {}) {
+  // Do not include clickable links. Provide instructions for admins to open the app
+  // or the web panel and navigate to the Access Requests section, then paste the
+  // provided request id if needed.
+  const subject = `${APP_NAME} - Nuova richiesta di accesso da ${accessRequest.email}`;
+  const text = `Ciao,\n\nHai ricevuto una nuova richiesta di accesso.\n\nNome: ${accessRequest.name || ''}\nEmail: ${accessRequest.email}\nAzienda: ${accessRequest.company || ''}\n\nPer valutarla segui questi passaggi:\n1) Apri l'app ${APP_NAME} e accedi con un account admin.\n2) Vai al menù principale → Access Requests (Richieste di accesso).\n3) Cerca la richiesta con l'ID: ${accessRequest.id} (o usa l'indirizzo email) e aprila per visualizzare i dettagli.\n\nSe preferisci il pannello web, accedi al pannello di amministrazione e cerca la sezione 'Access Requests', quindi cerca l'ID ${accessRequest.id}.\n\nSe non vuoi ricevere queste notifiche, aggiorna le impostazioni.`;
+  const html = `<p>Ciao,</p><p>Hai ricevuto una nuova richiesta di accesso.</p><ul><li><strong>Nome:</strong> ${accessRequest.name || ''}</li><li><strong>Email:</strong> ${accessRequest.email}</li><li><strong>Azienda:</strong> ${accessRequest.company || ''}</li></ul><p>Per valutarla:</p><ol><li>Apri l'app <strong>${APP_NAME}</strong> e accedi con un account admin.</li><li>Vai al menù principale → <strong>Access Requests</strong> (Richieste di accesso).</li><li>Cerca la richiesta usando l'ID <code>${accessRequest.id}</code> o l'indirizzo email e aprila per vedere i dettagli.</li></ol><p>Se preferisci il pannello web, accedi al pannello di amministrazione e cerca la sezione <strong>Access Requests</strong>, quindi cerca l'ID <code>${accessRequest.id}</code>.</p><p>Se non vuoi ricevere queste notifiche, aggiorna le impostazioni.</p>`;
+  return { subject, text, html, from: FROM };
+}
+
 export default {
   welcomeTemplate,
   adminNotifyNewUserTemplate,
@@ -109,5 +132,7 @@ export default {
   orderUnassignedTemplate,
   adminOrderStatusTemplate,
   adminOrderCreatedByYouTemplate,
+  inviteTemplate,
+  accessRequestNotifyTemplate,
   genericTestTemplate,
 };

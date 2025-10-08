@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useContext } from "react";
+import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, FlatList } from "react-native";
 import {
     Text,
@@ -11,12 +12,17 @@ import {
     IconButton,
 } from "react-native-paper";
 import SearchInput from '../components/SearchInput';
+import PasswordInput from '../components/PasswordInput';
+import RequiredTextInput from '../components/RequiredTextInput';
+import AssignmentsModal from '../components/AssignmentsModal';
 import { AuthContext } from "../context/AuthContext";
 import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
+import { buildHeaders } from '../utils/api';
+import { safeMessageFromData } from '../utils/errorUtils';
 import { StatusBar } from "react-native";
 import { RadioButton } from "react-native-paper";
-import FloatingToast from "../components/FloatingToast";
+import { showToast } from '../utils/toastService';
 
 
 export default function UsersScreen() {
@@ -36,6 +42,7 @@ export default function UsersScreen() {
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [fieldErrors, setFieldErrors] = useState({});
     const [role, setRole] = useState("customer");
 
     // Dropdown
@@ -46,22 +53,24 @@ export default function UsersScreen() {
         { label: "Cliente", value: "customer" },
     ];
 
-    const [toastVisible, setToastVisible] = useState(false);
-    const [toastMsg, setToastMsg] = useState("");
-    const [toastType, setToastType] = useState("success");
+    
+
+    // assignment modal state
+    const [assignmentsModalEmployee, setAssignmentsModalEmployee] = useState(null);
 
 
-    const showToast = (msg, type = "success") => {
-        setToastMsg(msg);
-        setToastType(type);
-        setToastVisible(true);
+    // use global toast service
+
+    const onFieldInvalid = (fieldName) => {
+        setFieldErrors(e => ({ ...e, [fieldName]: true }));
+        showToast(`Campo ${fieldName} obbligatorio`, 'error');
     };
 
 
     const fetchUsers = async () => {
         try {
             const response = await fetch(`${API_URL}/users`, {
-                headers: { Authorization: `Bearer ${token}` },
+                headers: buildHeaders(token),
             });
             const data = await response.json();
             if (response.ok) setUsers(data);
@@ -72,16 +81,33 @@ export default function UsersScreen() {
         }
     };
 
+    const { refreshKey } = useContext(SyncContext);
     useEffect(() => {
         if (token) fetchUsers();
-    }, [token]);
+    }, [token, refreshKey]);
+
+    useFocusEffect(
+        React.useCallback(() => {
+            return () => { try { setFieldErrors({}); } catch (e) { } };
+        }, [])
+    );
 
     // filtered users according to search
-    const filteredUsers = users.filter(u => {
-        if (!search) return true;
-        const s = search.toLowerCase();
-        return (u.name || '').toLowerCase().includes(s) || (u.email || '').toLowerCase().includes(s) || (u.role || '').toLowerCase().includes(s);
-    });
+    // hide the superadmin user from non-superadmin viewers
+    const superEmail = (require('../config').SUPERADMIN_EMAIL || '').toString().toLowerCase().trim();
+    const isViewerSuper = (authUser?.email || '').toString().toLowerCase().trim() === superEmail;
+
+    const filteredUsers = users
+        .filter(u => {
+            // hide the superadmin account from non-superadmin viewers
+            if (!isViewerSuper && (u.email || '').toString().toLowerCase().trim() === superEmail) return false;
+            return true;
+        })
+        .filter(u => {
+            if (!search) return true;
+            const s = search.toLowerCase();
+            return (u.name || '').toLowerCase().includes(s) || (u.email || '').toLowerCase().includes(s) || (u.role || '').toLowerCase().includes(s);
+        });
 
     const confirmToggleActive = (u) => {
         // Prevent admin disabling themselves
@@ -99,12 +125,16 @@ export default function UsersScreen() {
         try {
             const res = await fetch(`${API_URL}/users/${u.id}/activate`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                headers: buildHeaders(token, { 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ isActive: !u.isActive })
             });
             if (res.ok) { fetchUsers(); showToast(!u.isActive ? 'Utente riattivato' : 'Utente disattivato', 'success'); triggerRefresh(); }
-            else { const e = await res.json(); showToast(e.error || 'Errore', 'error'); }
-        } catch (err) { console.error(err); showToast('Errore server', 'error'); }
+            else {
+                const e = await res.json().catch(() => ({}));
+                const safe = safeMessageFromData(e || {}, 'Errore');
+                showToast(safe, 'error');
+            }
+            } catch (err) { console.error(err); showToast('Errore server', 'error'); }
     };
 
     // Creazione o modifica
@@ -159,10 +189,7 @@ export default function UsersScreen() {
 
             const response = await fetch(url, {
                 method,
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
-                },
+                headers: buildHeaders(token, { "Content-Type": "application/json" }),
                 body: JSON.stringify({ name, email, password, role }),
             });
 
@@ -176,6 +203,14 @@ export default function UsersScreen() {
                 setRole("customer");
                 showToast(editingUser ? "Utente modificato con successo" : "Utente inserito con successo", "success");
                 triggerRefresh();
+                } else if (response.status === 409) {
+                const data = await response.json().catch(() => ({}));
+                const safe = safeMessageFromData(data, 'Email già registrata');
+                showToast(safe, 'error');
+            } else {
+                const data = await response.json().catch(() => ({}));
+                const safe = safeMessageFromData(data, 'Errore salvataggio');
+                showToast(safe, 'error');
             }
         } catch (err) {
             console.error("Errore salvataggio:", err);
@@ -204,7 +239,7 @@ export default function UsersScreen() {
             }
             const response = await fetch(`${API_URL}/users/${userToDelete.id}`, {
                 method: "DELETE",
-                headers: { Authorization: `Bearer ${token}` },
+                headers: buildHeaders(token),
             });
             if (response.ok) {
                 fetchUsers();
@@ -261,28 +296,42 @@ export default function UsersScreen() {
                         <Card.Actions style={styles.actions}>
                             <Button
                                 mode="text"
-                                onPress={() => openDialog(item)}
+                                    onPress={() => openDialog(item)}
                                 icon="pencil"
-                                textColor="#7E57C2"
+                                    textColor="#7E57C2"
+                                    style={styles.actionButton}
                             >
                                 Modifica
                             </Button>
                             <Button
                                 mode="text"
-                                onPress={() => confirmDelete(item)}
+                                    onPress={() => confirmDelete(item)}
                                 icon="delete"
-                                textColor="red"
+                                    textColor="red"
+                                    style={styles.actionButton}
                             >
                                 Elimina
                             </Button>
                             <Button
                                 mode="text"
-                                onPress={() => handleToggleActive(item)}
-                                icon={item.isActive ? 'account-cancel' : 'account-check'}
-                                textColor={item.isActive ? 'orange' : '#4CAF50'}
+                                    onPress={() => handleToggleActive(item)}
+                                    icon={item.isActive ? 'account-cancel' : 'account-check'}
+                                    textColor={item.isActive ? 'orange' : '#4CAF50'}
+                                    style={styles.actionButton}
                             >
                                 {item.isActive ? 'Disabilita' : 'Abilita'}
                             </Button>
+                            {item.role === 'employee' && (
+                                <Button
+                                    mode="text"
+                                        onPress={() => setAssignmentsModalEmployee(item)}
+                                        icon="account-multiple"
+                                        textColor="#1976D2"
+                                        style={styles.actionButton}
+                                >
+                                    Assegna clienti
+                                </Button>
+                            )}
                         </Card.Actions>
                     </Card>
                 )}
@@ -302,25 +351,17 @@ export default function UsersScreen() {
                     <Dialog.Title>{editingUser ? "Modifica Utente" : "Nuovo Utente"}</Dialog.Title>
 
                     <Dialog.Content>
-                        <TextInput
-                            label="Nome"
-                            value={name}
-                            onChangeText={setName}
-                            style={styles.input}
-                        />
-                        <TextInput
-                            label="Email"
-                            value={email}
-                            onChangeText={setEmail}
-                            style={styles.input}
-                        />
+                        <RequiredTextInput label="Nome" name="Nome" required value={name} onChangeText={setName} onInvalid={onFieldInvalid} showError={!!fieldErrors.Nome} style={styles.input} />
+                        <RequiredTextInput label="Email" name="Email" required value={email} onChangeText={setEmail} onInvalid={onFieldInvalid} showError={!!fieldErrors.Email} style={styles.input} />
                         {!editingUser && (
-                            <TextInput
+                            <PasswordInput
                                 label="Password"
                                 value={password}
                                 onChangeText={setPassword}
-                                secureTextEntry
                                 style={styles.input}
+                                required
+                                showError={!!fieldErrors.Password}
+                                onBlur={() => { if (!password || password.length < 8) onFieldInvalid('Password'); }}
                             />
                         )}
 
@@ -357,11 +398,14 @@ export default function UsersScreen() {
             </Portal>
 
 
-            <FloatingToast
-                visible={toastVisible}
-                message={toastMsg}
-                type={toastType}
-                onHide={() => setToastVisible(false)}
+            {/* Global toast host handles toasts */}
+
+            <AssignmentsModal
+                visible={!!assignmentsModalEmployee}
+                employee={assignmentsModalEmployee}
+                token={token}
+                onDismiss={() => setAssignmentsModalEmployee(null)}
+                onSaved={() => { fetchUsers(); triggerRefresh(); setAssignmentsModalEmployee(null); showToast('Assegnazioni aggiornate', 'success'); }}
             />
         </View>
     );
@@ -376,7 +420,9 @@ const styles = StyleSheet.create({
         elevation: 3,
     },
     name: { fontSize: 18, fontWeight: "600", marginBottom: 4, color: "#333" },
-    actions: { justifyContent: "flex-end" },
+    // allow actions to wrap onto multiple lines on small screens
+    actions: { justifyContent: "flex-end", flexWrap: 'wrap' },
+    actionButton: { marginRight: 6, marginBottom: 6 },
     fab: {
         position: "absolute",
         right: 20,

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { View, StyleSheet, Linking } from 'react-native';
-import { Text, TextInput, Button } from 'react-native-paper';
-import FloatingToast from '../components/FloatingToast';
+import { Text, Button } from 'react-native-paper';
+import RequiredTextInput from '../components/RequiredTextInput';
+import { showToast } from '../utils/toastService';
+import { safeMessageFromData } from '../utils/errorUtils';
 import { API_URL } from '../config';
 import { AuthContext } from '../context/AuthContext';
 
@@ -10,7 +12,6 @@ export default function ResetPasswordScreen({ route, navigation }) {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState({ visible: false, message: '', type: 'success' });
 
   useEffect(() => {
     // try to parse token from initial URL (querystring) if not provided
@@ -29,7 +30,7 @@ export default function ResetPasswordScreen({ route, navigation }) {
     }
   }, []);
 
-  const showToast = (m, t = 'success') => setToast({ visible: true, message: m, type: t });
+  const onFieldInvalid = (fieldName) => showToast(`Campo ${fieldName} obbligatorio`, 'error');
   const { logout, user } = useContext(AuthContext);
 
   const handleReset = async () => {
@@ -55,9 +56,10 @@ export default function ResetPasswordScreen({ route, navigation }) {
           // fallback: try to navigate to Login
           try { navigation.navigate('Login'); } catch (err) { /* ignore */ }
         }
-      } else {
-        showToast(b.error || 'Errore reset password', 'error');
-      }
+    } else {
+  const safe = safeMessageFromData(b || {}, 'Errore reset password');
+  showToast(safe, 'error');
+    }
     } catch (e) {
       console.error('Reset error', e);
       showToast('Errore comunicazione con il server', 'error');
@@ -70,12 +72,12 @@ export default function ResetPasswordScreen({ route, navigation }) {
     <View style={styles.container}>
       <Text style={styles.title}>Reset password</Text>
       <Text style={{ marginBottom: 8 }}>Incolla il token ricevuto (se il link non funziona) oppure apri il link nell'app.</Text>
-      <TextInput label="Token" value={token} onChangeText={setToken} multiline style={styles.input} />
-      <TextInput label="Nuova password" secureTextEntry value={password} onChangeText={setPassword} style={styles.input} />
-      <TextInput label="Conferma nuova password" secureTextEntry value={confirm} onChangeText={setConfirm} style={styles.input} />
+      <RequiredTextInput label="Token" name="Token" required value={token} onChangeText={setToken} onInvalid={onFieldInvalid} style={styles.input} multiline />
+    <PasswordInput label="Nuova password" value={password} onChangeText={setPassword} style={styles.input} required showError={false} onBlur={() => { if (!password || password.length < 8) onFieldInvalid('Nuova password'); }} />
+    <PasswordInput label="Conferma nuova password" value={confirm} onChangeText={setConfirm} style={styles.input} required showError={false} onBlur={() => { if (confirm !== password) showToast('Le password non coincidono', 'error'); }} />
       <Button mode="contained" onPress={handleReset} loading={loading} disabled={loading} style={{ marginTop: 10 }}>Imposta nuova password</Button>
 
-      <FloatingToast visible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast({ ...toast, visible: false })} />
+  {/* global FloatingToast host */}
     </View>
   );
 }

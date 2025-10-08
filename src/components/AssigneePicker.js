@@ -41,7 +41,7 @@ export default function AssigneePicker({ visible, onDismiss, users = [], onSelec
                   <Text style={styles.title}>{title}</Text>
               <IconButton icon="close" onPress={onDismiss} />
             </View>
-                <SearchInput placeholder="Cerca per nome o email" value={query} onChangeText={setQuery} compact={true} style={{ container: { marginVertical: 8 }, input: { paddingVertical: 8 } }} />
+                <SearchInput placeholder="Cerca per nome o email" value={query} onChangeText={setQuery} style={{ container: { marginVertical: 8 }, input: { paddingVertical: 8 } }} />
 
                 <FlatList
                   data={filtered}
@@ -68,7 +68,7 @@ export default function AssigneePicker({ visible, onDismiss, users = [], onSelec
 
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  surface: { width: '92%', maxWidth: 560, maxHeight: '80%', padding: 12, borderRadius: 12, backgroundColor: '#fff' },
+  surface: { width: '92%', maxWidth: 560, maxHeight: '96%', padding: 16, borderRadius: 14, backgroundColor: '#fff', elevation: 6, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { fontSize: 18, fontWeight: '700' },
   search: { marginTop: 10, marginBottom: 8 },

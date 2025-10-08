@@ -1,9 +1,12 @@
 import React, { useState, useContext } from "react";
 import { View, StyleSheet } from "react-native";
 import { Text, Button, Portal, Dialog, TextInput } from "react-native-paper";
+import PasswordInput from '../components/PasswordInput';
 import { AuthContext } from "../context/AuthContext";
+import { buildHeaders } from '../utils/api';
 import { API_URL } from "../config";
-import FloatingToast from "../components/FloatingToast";
+import { showToast } from '../utils/toastService';
+import { safeMessageFromData } from '../utils/errorUtils';
 
 export default function SettingsScreen() {
   const { token, logout } = useContext(AuthContext) || {};
@@ -11,9 +14,7 @@ export default function SettingsScreen() {
   const [oldPwd, setOldPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
-  const [toast, setToast] = useState({ visible: false, message: '', type: 'success' });
-
-  const showToast = (m, t = 'success') => setToast({ visible: true, message: m, type: t });
+  // use global showToast
 
   const handleChangePassword = async () => {
     if (!oldPwd || !newPwd || !confirmPwd) return showToast('Compila tutti i campi', 'error');
@@ -30,20 +31,21 @@ export default function SettingsScreen() {
       }
       const res = await fetch(`${API_URL}/users/change-password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: buildHeaders(token, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ oldPassword: oldPwd, newPassword: newPwd }),
       });
       const body = await res.json().catch(() => ({}));
-      if (res.ok) {
-        showToast('Password aggiornata', 'success');
-        setChangeVisible(false);
-        setOldPwd(''); setNewPwd(''); setConfirmPwd('');
+    if (res.ok) {
+      showToast('Password aggiornata', 'success');
+      setChangeVisible(false);
+      setOldPwd(''); setNewPwd(''); setConfirmPwd('');
         // if server requests force logout, do it
         if (body && body.forceLogout && typeof logout === 'function') {
           logout();
         }
       } else {
-        showToast(body.error || 'Errore cambio password', 'error');
+        const safe = safeMessageFromData(body || {}, 'Errore cambio password');
+        showToast(safe, 'error');
       }
     } catch (e) {
       console.error('Change password error', e);
@@ -54,16 +56,17 @@ export default function SettingsScreen() {
   const handleSendTestEmail = async () => {
     try {
       if (!token) return showToast('Devi essere autenticato per inviare la mail di test', 'error');
-      const res = await fetch(`${API_URL}/users/send-test`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${API_URL}/users/send-test`, { method: 'POST', headers: buildHeaders(token) });
       if (res.ok) {
-        showToast('Email di test inviata', 'success');
+  showToast('Email di test inviata', 'success');
       } else {
-        const b = await res.json().catch(() => ({}));
-        showToast(b.error || 'Invio mail fallito', 'error');
+    const b = await res.json().catch(() => ({}));
+  const safe = safeMessageFromData(b || {}, 'Invio mail fallito');
+  showToast(safe, 'error');
       }
     } catch (e) {
       console.error('Send test email error', e);
-      showToast('Errore server durante invio', 'error');
+  showToast('Errore server durante invio', 'error');
     }
   };
 
@@ -77,9 +80,9 @@ export default function SettingsScreen() {
         <Dialog visible={changeVisible} onDismiss={() => setChangeVisible(false)}>
           <Dialog.Title>Cambia password</Dialog.Title>
           <Dialog.Content>
-            <TextInput label="Password attuale" value={oldPwd} onChangeText={setOldPwd} secureTextEntry />
-            <TextInput label="Nuova password" value={newPwd} onChangeText={setNewPwd} secureTextEntry style={{ marginTop: 10 }} />
-            <TextInput label="Conferma nuova password" value={confirmPwd} onChangeText={setConfirmPwd} secureTextEntry style={{ marginTop: 10 }} />
+            <PasswordInput label="Password attuale" value={oldPwd} onChangeText={setOldPwd} />
+            <PasswordInput label="Nuova password" value={newPwd} onChangeText={setNewPwd} style={{ marginTop: 10 }} />
+            <PasswordInput label="Conferma nuova password" value={confirmPwd} onChangeText={setConfirmPwd} style={{ marginTop: 10 }} />
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setChangeVisible(false)}>Annulla</Button>
@@ -88,7 +91,7 @@ export default function SettingsScreen() {
         </Dialog>
       </Portal>
 
-      <FloatingToast visible={toast.visible} message={toast.message} type={toast.type} onHide={() => setToast({ ...toast, visible: false })} />
+  {/* global FloatingToast host */}
     </View>
   );
 }

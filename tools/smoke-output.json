@@ -1,0 +1,93 @@
+{
+  "api": "http://localhost:4000/api",
+  "startedAt": "2025-10-05T22:25:37.543Z",
+  "checks": [
+    {
+      "name": "GET /health",
+      "status": 404,
+      "ok": false,
+      "body": {
+        "error": "Not Found",
+        "path": "/api/health"
+      }
+    },
+    {
+      "name": "GET /products",
+      "status": 200,
+      "ok": true,
+      "body": {
+        "count": 2
+      }
+    },
+    {
+      "name": "GET /users",
+      "status": 200,
+      "ok": true,
+      "body": [
+        {
+          "id": 40,
+          "name": "Admin User",
+          "email": "admin@test.com",
+          "role": "admin",
+          "createdAt": "2025-10-02T19:11:06.900Z",
+          "isActive": true
+        },
+        {
+          "id": 46,
+          "name": "Smoke Test User",
+          "email": "smoke+1759432371942@example.test",
+          "role": "customer",
+          "createdAt": "2025-10-02T19:12:52.071Z",
+          "isActive": false
+        },
+        {
+          "id": 47,
+          "name": "Smoke User",
+          "email": "smoke.user.1759439708@example.test",
+          "role": "customer",
+          "createdAt": "2025-10-02T19:15:10.296Z",
+          "isActive": true
+        }
+      ]
+    },
+    {
+      "name": "POST /users",
+      "status": 200,
+      "ok": true,
+      "body": {
+        "id": 48,
+        "name": "Smoke Test User",
+        "email": "smoke+1759703137782@example.test",
+        "role": "customer",
+        "createdAt": "2025-10-05T22:25:37.921Z",
+        "isActive": true
+      }
+    },
+    {
+      "name": "POST /orders",
+      "status": 201,
+      "ok": true,
+      "body": {
+        "id": 132,
+        "customerId": 48,
+        "createdById": 40,
+        "assignedToId": null,
+        "total": 9.99,
+        "status": "pending",
+        "createdAt": "2025-10-05T22:25:38.004Z",
+        "deletedAt": null,
+        "deletedById": null,
+        "items": [
+          {
+            "id": 279,
+            "orderId": 132,
+            "productId": 8,
+            "quantity": 1,
+            "unitPrice": 9.99
+          }
+        ]
+      }
+    }
+  ],
+  "endedAt": "2025-10-05T22:25:38.027Z"
+}

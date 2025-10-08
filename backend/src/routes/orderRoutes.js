@@ -2,6 +2,7 @@ import express from 'express'
 import { PrismaClient } from '@prisma/client'
 import { authenticateToken } from '../middleware/auth.js'
 import { logApp, logAudit } from '../utils/logger.js'
+import { canViewOrder } from '../utils/visibility.js';
 
 const router = express.Router()
 const prisma = new PrismaClient()
@@ -35,19 +36,52 @@ const ORDER_INCLUDE = {
   },
 }
 
+// Helper: check whether a given customer is assigned to a given employee
+async function customerAssignedToEmployee(customerId, employeeId) {
+  try {
+    if (!customerId || !employeeId) return false;
+    const ca = await prisma.customerAssignment.findFirst({ where: { customerId: parseInt(customerId), employeeId: parseInt(employeeId) } });
+    return !!ca;
+  } catch (e) {
+    console.error('Error checking customerAssignment', e);
+    return false;
+  }
+}
+
 // GET /api/orders - list with optional filters
 router.get('/', authenticateToken, async (req, res, next) => {
   try {
     const user = req.user;
     const showDeleted = String(req.query.deleted || 'false') === 'true';
     // respect roles: admin sees all, employee sees assigned, customer sees own
-    if (user.role === 'admin') {
-      const where = showDeleted ? {} : { deletedAt: null };
-      const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
-      return res.json(orders);
-    }
+      if (user.role === 'admin') {
+        const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || '';
+        // superadmin sees everything
+        if (user.email && user.email.toLowerCase() === (SUPERADMIN_EMAIL || '').toLowerCase()) {
+          const where = showDeleted ? {} : { deletedAt: null };
+          const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
+          return res.json(orders);
+        }
+
+          // admin: see own orders, orders created by direct subordinates, and orders for customers assigned to his employees
+          const subs = await prisma.user.findMany({ where: { createdById: user.id }, select: { id: true } });
+          const subordinateIds = subs.map(s => s.id);
+          // find customers assigned to this admin's employees
+          const assigned = await prisma.customerAssignment.findMany({ where: { employeeId: { in: subordinateIds } }, select: { customerId: true } });
+          const assignedCustomerIds = assigned.map(a => a.customerId);
+          const where = showDeleted
+            ? { OR: [ { createdById: user.id }, { createdById: { in: subordinateIds } }, { customerId: { in: assignedCustomerIds } } ] }
+            : { OR: [ { createdById: user.id }, { createdById: { in: subordinateIds } }, { customerId: { in: assignedCustomerIds } } ], deletedAt: null };
+          const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
+          return res.json(orders);
+      }
     if (user.role === 'employee') {
-      const where = showDeleted ? { assignedToId: user.id } : { assignedToId: user.id, deletedAt: null };
+      // employee can see orders assigned to them OR orders for customers assigned to them
+      const assignedCustomers = await prisma.customerAssignment.findMany({ where: { employeeId: user.id }, select: { customerId: true } });
+      const assignedCustomerIds = assignedCustomers.map(a => a.customerId);
+      const where = showDeleted
+        ? { OR: [ { assignedToId: user.id }, { customerId: { in: assignedCustomerIds } } ] }
+        : { OR: [ { assignedToId: user.id }, { customerId: { in: assignedCustomerIds } } ], deletedAt: null };
       const orders = await prisma.order.findMany({ where, ...ORDER_INCLUDE });
       return res.json(orders);
     }
@@ -66,7 +100,9 @@ router.get('/:id', authenticateToken, async (req, res, next) => {
     const user = req.user;
     console.log(`[orderRoutes] GET /orders/${id} requested by user ${user?.id || 'unknown'}`);
     if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: 'Invalid id' })
-
+    // enforce visibility
+    const allowed = await canViewOrder(req.user, id);
+    if (!allowed) return res.status(403).json({ error: 'Accesso negato' });
     const order = await prisma.order.findUnique({ where: { id }, ...ORDER_INCLUDE })
     if (!order) return res.status(404).json({ error: 'Order not found' })
     res.json(order)
@@ -109,9 +145,21 @@ router.put('/:id/assign', authenticateToken, async (req, res) => {
     const order = await prisma.order.findUnique({ where: { id: orderId } }); if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
     if (order.status === 'completed') return res.status(400).json({ error: "Ordine completato. Non è possibile modificarlo." });
     if (user.role !== 'admin') return res.status(403).json({ error: 'Solo admin può riassegnare ordini' });
+    let assignee = null;
     if (assignedToId) {
-      const assignee = await prisma.user.findUnique({ where: { id: parseInt(assignedToId) } }); if (!assignee) return res.status(400).json({ error: 'Utente assegnato non trovato' });
+      assignee = await prisma.user.findUnique({ where: { id: parseInt(assignedToId) } }); if (!assignee) return res.status(400).json({ error: 'Utente assegnato non trovato' });
       if (!['employee','admin'].includes(String(assignee.role))) return res.status(400).json({ error: 'Assegnatario deve essere un dipendente (employee) o admin' });
+    }
+    // Ensure that if we're assigning the order to someone, the order has a customer
+    const checkAssignedTo = assignedToId ? parseInt(assignedToId) : null;
+    if (checkAssignedTo) {
+      const effectiveCustomerId = order.customerId;
+      if (!effectiveCustomerId) return res.status(400).json({ error: 'Cliente obbligatorio per assegnare l\'ordine' });
+      // skip mapping check if assignee is admin
+      if (!(assignee && assignee.role === 'admin')) {
+        const mapped = await customerAssignedToEmployee(effectiveCustomerId, checkAssignedTo);
+  if (!mapped) return res.status(400).json({ error: 'mapping_required', mappingRequired: true, message: 'Il cliente non è assegnato all\'operatore selezionato. Creare prima l\'assegnazione.' });
+      }
     }
   const parsedAssignedTo = assignedToId ? parseInt(assignedToId) : null;
   const newData = { assignedToId: parsedAssignedTo };
@@ -161,7 +209,50 @@ router.put('/:id/assign', authenticateToken, async (req, res) => {
     })();
 
     res.json({ ok: true, assignedToId: updated.assignedToId || null });
-  } catch (err) { console.error('Assign order error', err); if (err && err.status && err.message) return res.status(err.status).json({ error: err.message }); res.status(500).json({ error: 'Errore assegnazione ordine' }); }
+  } catch (err) {
+    console.error('Assign order error', err);
+    // If handler threw a structured mapping error object propagate it in a controlled way
+    if (err && (err.error === 'mapping_required' || err.mappingRequired)) return res.status(err.status || 400).json({ error: 'mapping_required', mappingRequired: true, message: err.message || 'Mapping richiesto' });
+    // If handler threw a status/message object, avoid leaking internal message; prefer a safe generic response
+    if (err && err.status) return res.status(err.status).json({ error: 'Errore assegnazione ordine' });
+    res.status(500).json({ error: 'Errore assegnazione ordine' });
+  }
+});
+
+// POST /:id/assign-to-me - assign current authenticated user to the order
+router.post('/:id/assign-to-me', authenticateToken, async (req, res) => {
+  const { id } = req.params; const user = req.user;
+  try {
+    const orderId = parseInt(id); if (Number.isNaN(orderId)) return res.status(400).json({ error: 'Order id non valido' });
+    const order = await prisma.order.findUnique({ where: { id: orderId } }); if (!order) return res.status(404).json({ error: 'Ordine non trovato' });
+    if (order.status === 'completed') return res.status(400).json({ error: "Ordine completato. Non è possibile modificarlo." });
+    // Only employees and admins can assign to themselves
+    if (!['employee','admin'].includes(String(user.role))) return res.status(403).json({ error: 'Permesso negato' });
+    // If already assigned to somebody else, only admin can override
+    if (order.assignedToId && order.assignedToId !== user.id && user.role !== 'admin') return res.status(403).json({ error: 'Ordine già assegnato ad un altro utente' });
+
+  // Ensure that the order has a customer and that the customer is assigned to this user
+  if (!order.customerId) return res.status(400).json({ error: 'Ordine non ha cliente, impossibile assegnare a se stessi' });
+  const mappedToMe = await customerAssignedToEmployee(order.customerId, user.id);
+  if (!mappedToMe && user.role !== 'admin') return res.status(400).json({ error: 'mapping_required', mappingRequired: true, message: 'Il cliente non è assegnato a te. Creare prima l\'assegnazione.' });
+
+    const newData = { assignedToId: user.id };
+    if (order.status !== 'completed' && order.status !== 'cancelled') newData.status = 'in_progress';
+
+    const updated = await prisma.order.update({ where: { id: order.id }, data: newData });
+    try { logAudit('assign', 'order', updated.id, req.user || {}, { assignedToId: updated.assignedToId || null }); } catch (e) { console.error('Audit log error', e); }
+    logApp('order.assign_to_me', { orderId: updated.id, by: req.user?.id || null });
+
+    // Send notifications and handle side-effects async (emails disabled but keep hook)
+    (async () => {
+      try {
+        const orderFull = await prisma.order.findUnique({ where: { id: updated.id }, include: { assignedTo: true, customer: true, createdBy: true } });
+        try { await sendOrderNotificationsIfActive(orderFull.id, 'assign_to_me'); } catch (e) { console.error('Notify after assign-to-me failed (emails disabled)', e); }
+      } catch (e) { console.error('Assign-to-me post-update hook failed', e); }
+    })();
+
+    return res.json({ ok: true, assignedToId: updated.assignedToId || null });
+  } catch (err) { console.error('Assign-to-me error', err); res.status(500).json({ error: 'Errore assegnazione ordine' }); }
 });
 
 // PUT /:id/status
@@ -178,6 +269,24 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     const hasAssignee = !!(order.assignedToId || payloadAssigned);
     if (status === 'pending' && order.status === 'draft' && hasAssignee) {
       targetStatus = 'in_progress';
+    }
+
+    // If we're moving a draft to active and an assignee exists (either in payload or existing), ensure the customer is assigned to that assignee
+    const willAssignTo = payloadAssigned || order.assignedToId || null;
+    if (order.status === 'draft' && targetStatus !== 'draft' && willAssignTo) {
+      const effectiveCustomerId = req.body.customerId ? parseInt(req.body.customerId) : order.customerId;
+      if (!effectiveCustomerId) return res.status(400).json({ error: 'Cliente obbligatorio quando si pubblica un ordine con assegnatario' });
+      // resolve assignee role to possibly skip mapping check
+      let assigneeRole = null;
+      if (payloadAssigned) {
+        const a = await prisma.user.findUnique({ where: { id: payloadAssigned } }); assigneeRole = a?.role || null;
+      } else if (order.assignedToId) {
+        const a = await prisma.user.findUnique({ where: { id: order.assignedToId } }); assigneeRole = a?.role || null;
+      }
+      if (assigneeRole !== 'admin') {
+        const mapped = await customerAssignedToEmployee(effectiveCustomerId, willAssignTo);
+  if (!mapped) return res.status(400).json({ error: 'mapping_required', mappingRequired: true, message: 'Il cliente non è assegnato all\'operatore selezionato. Creare prima l\'assegnazione.' });
+      }
     }
 
     if (user.role === 'customer') {
@@ -203,7 +312,12 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     try { await sendOrderNotificationsIfActive(updated.id, 'status_change', !!req.body.sendEmail); } catch (e) { console.error('Notify after status change failed', e); }
 
     res.json({ ok: true, status: updated.status });
-  } catch (err) { console.error('Change status error', err); res.status(500).json({ error: 'Errore cambio stato ordine' }); }
+  } catch (err) {
+    console.error('Change status error', err);
+    if (err && (err.error === 'mapping_required' || err.mappingRequired)) return res.status(err.status || 400).json({ error: 'mapping_required', mappingRequired: true, message: err.message || 'Mapping richiesto' });
+    if (err && err.status) return res.status(err.status).json({ error: 'Errore cambio stato ordine' });
+    res.status(500).json({ error: 'Errore cambio stato ordine' });
+  }
 });
 
 // POST /api/orders - create
@@ -249,12 +363,25 @@ router.post('/', authenticateToken, async (req, res) => {
       };
 
       if (assignedToId) {
-        if (user.role !== 'admin') throw { status: 403, message: 'Solo admin può assegnare ordini' };
-        const assignee = await tx.user.findUnique({ where: { id: parseInt(assignedToId) } });
-        if (!assignee) throw { status: 400, message: 'Utente assegnato non trovato' };
+  if (user.role !== 'admin') throw { status: 403, message: 'Solo admin può assegnare ordini' };
+  const assignee = await tx.user.findUnique({ where: { id: parseInt(assignedToId) } });
+  if (!assignee) throw { status: 400, message: 'Utente assegnato non trovato' };
         orderData.assignedToId = parseInt(assignedToId);
         if (requestedStatus !== 'draft') orderData.status = 'in_progress';
       }
+
+        // If assigning at creation time, ensure the customer is assigned to the assignee
+        // NOTE: skip this mapping check when the order is being created as a draft
+        if (orderData.assignedToId && orderData.status !== 'draft') {
+          const effectiveCustomerId = orderData.customerId;
+          if (!effectiveCustomerId) throw { status: 400, message: 'Cliente obbligatorio quando si assegna un ordine' };
+          // check assignee role within transaction; if assignee is admin skip mapping requirement
+          const assigneeTx = await tx.user.findUnique({ where: { id: orderData.assignedToId } });
+          if (!(assigneeTx && assigneeTx.role === 'admin')) {
+            const mapped = await customerAssignedToEmployee(effectiveCustomerId, orderData.assignedToId);
+            if (!mapped) throw { status: 400, error: 'mapping_required', mappingRequired: true, message: 'Il cliente non è assegnato all\'operatore selezionato. Creare prima l\'assegnazione.' };
+          }
+        }
 
       const order = await tx.order.create({ data: orderData, include: { items: true } });
       if (requestedStatus !== 'draft') {
@@ -280,9 +407,10 @@ router.post('/', authenticateToken, async (req, res) => {
       try { await sendOrderNotificationsIfActive(result.id, 'create'); } catch (e) { console.error('Notify after create failed (emails disabled)', e); }
     }
     res.status(201).json(result);
-  } catch (err) {
+    } catch (err) {
     console.error('Order creation error:', err && err.stack ? err.stack : err);
-    if (err && err.status && err.message) return res.status(err.status).json({ error: err.message });
+    if (err && (err.error === 'mapping_required' || err.mappingRequired)) return res.status(err.status || 400).json({ error: 'mapping_required', mappingRequired: true, message: err.message || 'Mapping richiesto' });
+    if (err && err.status) return res.status(err.status).json({ error: 'Errore creazione ordine' });
     if (process.env.NODE_ENV !== 'production') return res.status(500).json({ error: 'Errore creazione ordine', details: err && err.message ? String(err.message) : String(err) });
     res.status(500).json({ error: 'Errore creazione ordine' });
   }
@@ -323,6 +451,21 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
     if (user.role === 'admin') {
       if (typeof customerId !== 'undefined') updateData.customerId = customerId ? parseInt(customerId) : null;
       if (typeof assignedToId !== 'undefined') updateData.assignedToId = assignedToId ? parseInt(assignedToId) : null;
+    }
+
+    // If admin provided an assignedToId in payload, ensure customer is assigned to that employee
+    // Skip mapping check when admin explicitly keeps/sets the order as a draft (no mapping required for drafts)
+    if (user.role === 'admin' && typeof assignedToId !== 'undefined' && assignedToId) {
+      const effectiveCustomer = (typeof customerId !== 'undefined' && customerId) ? parseInt(customerId) : order.customerId;
+      if (!effectiveCustomer) return res.status(400).json({ error: 'Cliente obbligatorio quando si assegna un ordine' });
+      const assigneeCheck = await prisma.user.findUnique({ where: { id: parseInt(assignedToId) } });
+      if (!(assigneeCheck && assigneeCheck.role === 'admin')) {
+        // only enforce mapping when the update is not explicitly a draft save
+        if (requestedStatus !== 'draft') {
+          const mapped = await customerAssignedToEmployee(effectiveCustomer, parseInt(assignedToId));
+          if (!mapped) return res.status(400).json({ error: 'mapping_required', mappingRequired: true, message: 'Il cliente non è assegnato all\'operatore selezionato. Creare prima l\'assegnazione.' });
+        }
+      }
     }
 
     // Handle status transitions: if requestedStatus moves from draft -> pending/in_progress we must reserve stock
@@ -390,7 +533,10 @@ router.put('/:id', authenticateToken, async (req, res, next) => {
     res.json(result);
   } catch (err) {
     console.error('Order update error', err);
-    if (err && err.status && err.message) return res.status(err.status).json({ error: err.message });
+    // If handler threw a structured mapping error object propagate it in a controlled way
+    if (err && (err.error === 'mapping_required' || err.mappingRequired)) return res.status(err.status || 400).json({ error: 'mapping_required', mappingRequired: true, message: err.message || 'Mapping richiesto' });
+    // If handler threw a status object, avoid leaking internal message; prefer a safe generic response
+    if (err && err.status) return res.status(err.status).json({ error: 'Errore aggiornamento ordine' });
     res.status(500).json({ error: 'Errore aggiornamento ordine' });
   }
 })

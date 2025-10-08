@@ -48,7 +48,7 @@ router.post("/login", async (req, res) => {
   res.json({
     token,
     refreshToken,
-    user: { id: user.id, name: user.name, role: user.role, isActive: user.isActive }
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, isActive: user.isActive }
   });
 });
 
@@ -61,15 +61,13 @@ router.post('/request-reset', async (req, res) => {
     if (!user) return res.status(200).json({ ok: true }); // do not reveal existence
 
     // create a short lived token for reset
-  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  // deep link scheme for mobile apps (will open the app if registered), and a web fallback
-  const deepLink = `${process.env.FRONTEND_DEEPLINK || 'gestionexus://reset-password'}?token=${token}`;
-  const webLink = `${process.env.FRONTEND_URL || 'http://localhost:19006'}/reset-password?token=${token}`;
-    try {
-  const tpl = await import('../utils/emailTemplates.js');
-  const mail = tpl.resetRequestTemplate(user, { token, deepLink, webLink });
-  await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from });
-    } catch (e) { console.error('Reset request template error', e); }
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      try {
+    const tpl = await import('../utils/emailTemplates.js');
+    // Pass only the token; templates will provide textual instructions (no external links)
+    const mail = tpl.resetRequestTemplate(user, { token });
+    await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html, from: mail.from });
+      } catch (e) { console.error('Reset request template error', e); }
     res.json({ ok: true });
   } catch (e) {
     console.error('Request reset error', e);
@@ -147,12 +145,15 @@ router.post("/users", authAdmin, async (req, res) => {
   try {
     // Controllo se l'email esiste già
     const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) return res.status(400).json({ error: "Email già registrata" });
+    if (existing) {
+      const safeExisting = { id: existing.id, name: existing.name, email: existing.email, role: existing.role, isActive: existing.isActive };
+      return res.status(409).json({ error: 'Email esistente', existing: true, user: safeExisting });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.user.create({
-      data: { name, email, password: hashedPassword, role },
+      data: { name, email, password: hashedPassword, role, createdById: req.user?.id || null },
       select: { id: true, name: true, email: true, role: true, createdAt: true }
     });
 

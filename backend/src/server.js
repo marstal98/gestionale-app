@@ -3,10 +3,15 @@ import cors from "cors";
 import dotenv from "dotenv";
 import authRoutes from "./routes/authRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import accessRequestRoutes from "./routes/accessRequestRoutes.js";
+import inviteRoutes from "./routes/inviteRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
+import customerRoutes from "./routes/customerRoutes.js";
 import debugRoutes from "./routes/debugRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
+import adminWeb from './routes/adminWeb.js';
+import assignmentRoutes from './routes/assignmentRoutes.js';
 
 dotenv.config();
 
@@ -57,7 +62,10 @@ app.use('/api/users', (req, res, next) => {
 	next();
 });
 app.use("/api/users", userRoutes);
+app.use('/api/access-requests', accessRequestRoutes);
+app.use('/api/invite', inviteRoutes);
 app.use("/api/products", productRoutes);
+app.use('/api/customers', customerRoutes);
 // Debug: log incoming requests to orders to help troubleshoot 404s
 // Debug catch-all for /api/orders: log request details then continue to router
 app.use('/api/orders', (req, res, next) => {
@@ -70,8 +78,12 @@ app.use('/api/orders', (req, res, next) => {
 	next();
 });
 app.use("/api/orders", orderRoutes);
+app.use('/api/assignments', assignmentRoutes);
 app.use("/api/debug", debugRoutes);
 app.use("/api/inventory", inventoryRoutes);
+
+// Minimal admin web UI
+app.use('/admin', adminWeb);
 
 // Fallback handlers: expose assign/status/cancel at app-level in case router methods not matched
 import { PrismaClient } from '@prisma/client';

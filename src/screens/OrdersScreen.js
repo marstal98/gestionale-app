@@ -7,12 +7,14 @@ import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { Swipeable } from 'react-native-gesture-handler';
 import SearchInput from '../components/SearchInput';
-import FloatingToast from '../components/FloatingToast';
+import { showToast } from '../utils/toastService';
+import { safeMessageFromData } from '../utils/errorUtils';
 import AssigneePicker from '../components/AssigneePicker';
 import OrdersFilterModal from '../components/OrdersFilterModal';
 import { AuthContext } from "../context/AuthContext";
 import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
+import { buildHeaders } from '../utils/api';
 
 export default function OrdersScreen({ navigation }) {
   const { token, user } = useContext(AuthContext);
@@ -25,8 +27,9 @@ export default function OrdersScreen({ navigation }) {
   const [apiRawSample, setApiRawSample] = useState([]);
   const [apiRawSampleDetails, setApiRawSampleDetails] = useState([]);
   const [apiRawSampleFull, setApiRawSampleFull] = useState([]);
-  const [toast, setToast] = useState({ visible: false, message: '', type: 'info' });
+  
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [assignConfirm, setAssignConfirm] = useState({ visible: false, order: null, employeeId: null, mode: null });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterVisible, setFilterVisible] = useState(false);
@@ -78,8 +81,8 @@ export default function OrdersScreen({ navigation }) {
         if (showLoading) setLoading(true);
         const ordersUrl = `${API_URL}/orders${effectiveShowTrash ? '?deleted=true' : '?deleted=false'}`;
         const [oRes, pRes] = await Promise.all([
-          fetch(ordersUrl, { headers: { Authorization: `Bearer ${token}` } }),
-          fetch(`${API_URL}/products`, { headers: { Authorization: `Bearer ${token}` } })
+          fetch(ordersUrl, { headers: buildHeaders(token) }),
+          fetch(`${API_URL}/products`, { headers: buildHeaders(token) })
         ]);
         const oData = await oRes.json();
         const pData = await pRes.json();
@@ -143,7 +146,7 @@ export default function OrdersScreen({ navigation }) {
         }
         if (pRes.ok) setProducts(Array.isArray(pData) ? pData : (pData?.data || []));
         try {
-          const uRes = await fetch(`${API_URL}/users`, { headers: { Authorization: `Bearer ${token}` } });
+          const uRes = await fetch(`${API_URL}/users`, { headers: buildHeaders(token) });
           if (uRes.ok) {
             const uData = await uRes.json();
             setUsersList(Array.isArray(uData) ? uData : (uData?.data || []));
@@ -162,20 +165,24 @@ export default function OrdersScreen({ navigation }) {
   const handleBulkRestore = async () => {
     if (!selectedIds || selectedIds.length === 0) return;
     try {
-      const promises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}/restore`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }));
+  const promises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}/restore`, { method: 'POST', headers: buildHeaders(token) }));
       const results = await Promise.all(promises);
       let ok = 0;
       const errors = [];
       for (const r of results) {
         if (r.ok) ok += 1; else {
           const e = await parseErrorResponse(r).catch(() => ({ error: `HTTP ${r.status}` }));
-          errors.push(e.error || `HTTP ${r.status}`);
+          // never push raw server error text; sanitize before adding
+          try {
+            const safe = safeMessageFromData(e.raw || e || {}, `HTTP ${r.status}`);
+            errors.push(safe);
+          } catch (ex) { errors.push(`HTTP ${r.status}`); }
         }
       }
-      setToast({ visible: true, message: `Ripristinati ${ok} / ${selectedIds.length} ordini`, type: ok === selectedIds.length ? 'success' : 'warning' });
+  showToast(`Ripristinati ${ok} / ${selectedIds.length} ordini`, ok === selectedIds.length ? 'success' : 'warning');
     } catch (e) {
       console.error('Bulk restore error', e);
-      setToast({ visible: true, message: 'Errore durante il ripristino multiplo', type: 'error' });
+      showToast('Errore durante il ripristino multiplo', 'error');
     } finally {
       setSelectionMode(false);
       setSelectedIds([]);
@@ -185,18 +192,30 @@ export default function OrdersScreen({ navigation }) {
 
   // helper to safely parse error responses (try JSON then fallback to text)
   const parseErrorResponse = async (res) => {
+    // Return structured error info but never expose raw JSON/text as user-visible `error`.
+    // Keep raw content in `raw` for internal logic (e.g. mapping_required detection).
     const out = { status: res?.status || null, error: null, raw: null };
     try {
       const json = await res.json();
-      // if json has error field return it
-      out.error = (json && (json.error || json.message)) ? (json.error || json.message) : JSON.stringify(json);
       out.raw = json;
+      // Prefer explicit error/message fields if present (these should be developer-controlled codes like 'mapping_required').
+      if (json && (json.error || json.message)) {
+        out.error = json.error || json.message;
+      } else {
+        // Do NOT stringify full JSON into out.error. Use a generic fallback so UI never displays raw payloads.
+        out.error = `HTTP ${res?.status || '??'}`;
+      }
       return out;
     } catch (e) {
       try {
         const txt = await res.text();
-        out.error = txt || `HTTP ${res.status}`;
         out.raw = txt;
+        // if server returned a short code-like string (no braces and reasonably short) we can keep it; otherwise use fallback
+        if (txt && txt.length > 0 && txt.length < 256 && !txt.trim().startsWith('{') && !txt.trim().startsWith('[')) {
+          out.error = txt;
+        } else {
+          out.error = `HTTP ${res?.status || '??'}`;
+        }
         return out;
       } catch (e2) {
         out.error = `HTTP ${res?.status || '??'}`;
@@ -210,20 +229,27 @@ export default function OrdersScreen({ navigation }) {
   // helper to change order status via API
   const changeOrderStatus = async (orderId, newStatus) => {
     try {
-      const res = await fetch(`${API_URL}/orders/${orderId}/status`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ status: newStatus }) });
+      const res = await fetch(`${API_URL}/orders/${orderId}/status`, { method: 'PUT', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ status: newStatus }) });
       if (res.ok) {
-        return true;
+        return { ok: true };
       }
       const err = await parseErrorResponse(res);
-      setToast({ visible: true, message: err.error || 'Errore', type: 'error' });
-    } catch (e) { console.error(e); }
-    return false;
+      // If server indicates mapping required, propagate to caller so UI can open the dialog
+      if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) {
+        return { ok: false, mappingRequired: true, raw: err.raw };
+      }
+      // Never surface raw server text: show a safe, generic message
+      const safe = safeMessageFromData(err.raw || err, 'Errore');
+      showToast(safe, 'error');
+      return { ok: false };
+    } catch (e) { console.error(e); return { ok: false }; }
   };
 
   const handleConfirmOrder = async () => {
     if (!selectedOrder) return;
-    const ok = await changeOrderStatus(selectedOrder.id, 'pending');
-    if (ok) { selectedOrder.status = 'pending'; setSelectedOrder({ ...selectedOrder }); fetchData(); try { triggerRefresh(); } catch(e){} }
+    const res = await changeOrderStatus(selectedOrder.id, 'pending');
+    if (res && res.ok) { selectedOrder.status = 'pending'; setSelectedOrder({ ...selectedOrder }); fetchData(); try { triggerRefresh(); } catch(e){} }
+    else if (res && res.mappingRequired) { setAssignConfirm({ visible: true, order: selectedOrder, employeeId: selectedOrder.assignedToId, mode: 'send' }); }
   };
 
   const handleCancelOrder = async () => {
@@ -371,37 +397,45 @@ export default function OrdersScreen({ navigation }) {
   const createOrder = async () => {
     if (selectedItems.length === 0) return;
     try {
-      const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ items: selectedItems }) });
-  if (res.ok) {
-    // parse created order and show it immediately
-    let created = null;
-    try { created = await res.json(); } catch (e) { /* ignore parse error */ }
-    // normalize created payload if wrapped
-    const createdOrder = (created && created.id) ? created : (created?.data || created?.order || null);
-    setShowDialog(false);
-    setSelectedItems([]);
-    // ensure we show active orders and display loading so user sees the new order
-    setShowTrash(false);
-    // clear search and filters so the newly created order is visible
-    setSearch('');
-    setAppliedFilters({ status: [], customers: [], assignees: [] });
-    // if we have the created order from the response, insert it immediately so user sees it
-    if (createdOrder && createdOrder.id) {
-      setApiItems(prev => {
-        try {
-          if (prev.some(o => String(o.id) === String(createdOrder.id))) return prev;
-          return [createdOrder, ...prev];
-        } catch (e) { return prev; }
-      });
-      // open details for the created order so the user sees it right away
-      setSelectedOrder(createdOrder);
-      setShowDialog(true);
-    }
-    // still trigger a full refetch (visible) to sync state
-    await fetchData(false, true);
-    try { triggerRefresh(); } catch (e) { }
-  }
-  else { const err = await parseErrorResponse(res); setToast({ visible: true, message: err.error || 'Errore', type: 'error' }); }
+      const res = await fetch(`${API_URL}/orders`, { method: 'POST', headers: buildHeaders(token, { 'Content-Type': 'application/json' }), body: JSON.stringify({ items: selectedItems }) });
+      if (res.ok) {
+        // parse created order and show it immediately
+        let created = null;
+        try { created = await res.json(); } catch (e) { /* ignore parse error */ }
+        // normalize created payload if wrapped
+        const createdOrder = (created && created.id) ? created : (created?.data || created?.order || null);
+        setShowDialog(false);
+        setSelectedItems([]);
+        // ensure we show active orders and display loading so user sees the new order
+        setShowTrash(false);
+        // clear search and filters so the newly created order is visible
+        setSearch('');
+        setAppliedFilters({ status: [], customers: [], assignees: [] });
+        // if we have the created order from the response, insert it immediately so user sees it
+        if (createdOrder && createdOrder.id) {
+          setApiItems(prev => {
+            try {
+              if (prev.some(o => String(o.id) === String(createdOrder.id))) return prev;
+              return [createdOrder, ...prev];
+            } catch (e) { return prev; }
+          });
+          // open details for the created order so the user sees it right away
+          setSelectedOrder(createdOrder);
+          setShowDialog(true);
+        }
+        // still trigger a full refetch (visible) to sync state
+        await fetchData(false, true);
+        try { triggerRefresh(); } catch (e) { }
+      } else {
+        const err = await parseErrorResponse(res);
+        if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) {
+          // Server suggests mapping is required for this order creation flow; open assign dialog defensively
+          setAssignConfirm({ visible: true, order: err.raw.order || null, employeeId: err.raw.employeeId || null, mode: 'send' });
+        } else {
+          const safe = safeMessageFromData(err.raw || err, 'Errore');
+          showToast(safe, 'error');
+        }
+      }
     } catch (err) { console.error(err); }
   };
 
@@ -429,7 +463,6 @@ export default function OrdersScreen({ navigation }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
           <Button
             mode={!showTrash ? 'contained' : 'outlined'}
-            compact
             disabled={loading}
             onPress={async () => { setShowTrash(false); setSelectionMode(false); setSelectedIds([]); await fetchData(false); }}
             style={{ marginRight: 6 }}
@@ -438,7 +471,6 @@ export default function OrdersScreen({ navigation }) {
           </Button>
           <Button
             mode={showTrash ? 'contained' : 'outlined'}
-            compact
             disabled={loading}
             onPress={async () => { setShowTrash(true); setSelectionMode(false); setSelectedIds([]); await fetchData(true); }}
           >
@@ -556,20 +588,48 @@ export default function OrdersScreen({ navigation }) {
           const handleRestoreRow = async () => {
             try { swipeableRefs.current.get(item.id)?.close(); } catch (e) {}
             try {
-              const res = await fetch(`${API_URL}/orders/${item.id}/restore`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+              const res = await fetch(`${API_URL}/orders/${item.id}/restore`, { method: 'POST', headers: buildHeaders(token) });
               if (res.ok) {
-                setToast({ visible: true, message: 'Ordine ripristinato', type: 'success' });
+                showToast('Ordine ripristinato', 'success');
                 fetchData(); try { triggerRefresh(); } catch(e){}
               } else {
                 const err = await parseErrorResponse(res);
-                setToast({ visible: true, message: err.error || 'Errore ripristino', type: 'error' });
+                const safe = safeMessageFromData(err.raw || err, 'Errore ripristino');
+                showToast(safe, 'error');
               }
-            } catch (e) { console.error('Restore error', e); setToast({ visible: true, message: 'Errore ripristino', type: 'error' }); }
+            } catch (e) { console.error('Restore error', e); showToast('Errore ripristino', 'error'); }
           };
+          const checkAssignmentAndSend = async (order) => {
+            // Always check assignment mapping; show confirm dialog if missing
+            // if no customer or no assignee, just send (server or other checks may apply)
+            if (!order.customerId || !order.assignedToId) {
+              const ok = await changeOrderStatus(order.id, 'pending');
+              if (ok) { fetchData(); try { triggerRefresh(); } catch(e){} }
+              return;
+            }
+            try {
+              const aRes = await fetch(`${API_URL}/assignments?employeeId=${order.assignedToId}&customerId=${order.customerId}`, { headers: buildHeaders(token) });
+              const aData = aRes.ok ? await aRes.json() : [];
+                    if (!Array.isArray(aData) || aData.length === 0) {
+                      // show confirm dialog to create assignment
+                      setAssignConfirm({ visible: true, order, employeeId: order.assignedToId, mode: 'send' });
+                      return;
+                    }
+                    // assignment exists -> proceed
+                    const statusRes = await changeOrderStatus(order.id, 'pending');
+                    if (statusRes && statusRes.ok) { fetchData(); try { triggerRefresh(); } catch(e){} }
+                    else if (statusRes && statusRes.mappingRequired) { setAssignConfirm({ visible: true, order, employeeId: order.assignedToId, mode: 'send' }); }
+            } catch (e) {
+              // fallback to attempt sending
+                  const statusRes = await changeOrderStatus(order.id, 'pending');
+                  if (statusRes && statusRes.ok) { fetchData(); try { triggerRefresh(); } catch(e){} }
+                  else if (statusRes && statusRes.mappingRequired) { setAssignConfirm({ visible: true, order, employeeId: order.assignedToId, mode: 'send' }); }
+            }
+          };
+
           const handleSendRow = async () => {
             try { swipeableRefs.current.get(item.id)?.close(); } catch (e) {}
-            const ok = await changeOrderStatus(item.id, 'pending');
-            if (ok) { fetchData(); try { triggerRefresh(); } catch(e){} }
+            await checkAssignmentAndSend(item);
           };
 
           // right actions component for Swipeable
@@ -591,6 +651,44 @@ export default function OrdersScreen({ navigation }) {
                   {/* Assign: visible only to admin */}
                   {user?.role === 'admin' && item.status !== 'completed' && item.status !== 'cancelled' && (
                     <IconButton icon="account-switch" size={28} onPress={handleAssignRow} accessibilityLabel="Cambia assegnatario" />
+                  )}
+                  {/* Assign to me: visible to employees and admins when unassigned or assigned to self */}
+                  {(['employee','admin'].includes(user?.role) && item.status !== 'completed' && item.status !== 'cancelled') && (
+                    <IconButton icon="account-plus" size={28} onPress={async () => {
+                      try { swipeableRefs.current.get(item.id)?.close(); } catch (e) {}
+                      try {
+                        // Admins can always assign to themselves without requiring customer->employee mapping
+                        if (!item.customerId || user?.role === 'admin') {
+                          const res = await fetch(`${API_URL}/orders/${item.id}/assign-to-me`, { method: 'POST', headers: buildHeaders(token) });
+                          if (res.ok) { showToast('Assegnato a te', 'success'); fetchData(); try { triggerRefresh(); } catch (e) {} }
+                          else {
+                            const err = await parseErrorResponse(res);
+                            // if server indicates mapping required, show assignConfirm so user can create mapping
+                            if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) {
+                              setAssignConfirm({ visible: true, order: item, employeeId: user.id, mode: 'assignToMe' });
+                            } else {
+                              { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); }
+                            }
+                          }
+                          return;
+                        }
+                        // check if this customer is assigned to this user
+                        const aRes = await fetch(`${API_URL}/assignments?employeeId=${user.id}&customerId=${item.customerId}`, { headers: buildHeaders(token) });
+                        const aData = aRes.ok ? await aRes.json() : [];
+                        if (!Array.isArray(aData) || aData.length === 0) {
+                          // ask user to confirm creating assignment then assign to me
+                          setAssignConfirm({ visible: true, order: item, employeeId: user.id, mode: 'assignToMe' });
+                          return;
+                        }
+                        // assignment exists -> call assign-to-me
+                        const res = await fetch(`${API_URL}/orders/${item.id}/assign-to-me`, { method: 'POST', headers: buildHeaders(token) });
+                        if (res.ok) { showToast('Assegnato a te', 'success'); fetchData(); try { triggerRefresh(); } catch (e) {} }
+                        else { const err = await parseErrorResponse(res); const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); }
+                      } catch (e) {
+                        console.error('Assign to me error', e);
+                        showToast('Errore assegnazione', 'error');
+                      }
+                    }} accessibilityLabel="Assegna a me" />
                   )}
                   {/* Send (draft -> pending): visible for drafts and not for completed/cancelled */}
                   {item.status === 'draft' && ( (user?.role === 'admin') || (user?.role === 'customer' && user.id === item.customerId) ) && (
@@ -754,11 +852,13 @@ export default function OrdersScreen({ navigation }) {
                     <Button mode={sel ? 'contained' : 'outlined'} onPress={() => toggleSelectProduct(p)} style={{ marginTop:6 }}>{sel ? 'Selezionato' : 'Seleziona'}</Button>
                     {sel && (
                       <>
-                        <TextInput
+                        <RequiredTextInput
                           label="Quantità"
+                          name={`Quantità_${p.id}`}
                           value={String(sel.quantity)}
                           onChangeText={(t) => changeQty(p.id, t)}
                           keyboardType="numeric"
+                          onInvalid={() => showToast(`Campo Quantità obbligatorio`, 'error')}
                         />
                         {error ? <Text style={{ color: 'red', marginTop: 4 }}>{error}</Text> : null}
                       </>
@@ -820,7 +920,7 @@ export default function OrdersScreen({ navigation }) {
                   {user?.role === 'admin' && selectedOrder.assignedTo && !selectedOrder.deletedAt && (
                     <IconButton icon="close" size={20} onPress={async () => {
                       try {
-                        const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ assignedToId: null }) });
+                        const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ assignedToId: null }) });
                           if (res.ok) {
                           selectedOrder.assignedTo = null;
                           selectedOrder.assignedToId = null;
@@ -828,7 +928,12 @@ export default function OrdersScreen({ navigation }) {
                           fetchData();
                           try { triggerRefresh(); } catch (e) {}
                           } else {
-                          const err = await parseErrorResponse(res); setToast({ visible: true, message: err.error || 'Errore rimozione assegnatario', type: 'error' });
+                          const err = await parseErrorResponse(res);
+                          if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) {
+                            setAssignConfirm({ visible: true, order: selectedOrder, employeeId: null, mode: 'assign' });
+                          } else {
+                            { const safe = safeMessageFromData(err.raw || err, 'Errore rimozione assegnatario'); showToast(safe, 'error'); }
+                          }
                         }
                       } catch (e) { console.error(e); }
                     }} accessibilityLabel="Rimuovi assegnatario" />
@@ -842,23 +947,32 @@ export default function OrdersScreen({ navigation }) {
             {/* Assignee picker for assigning orders (opened by swipe action) */}
             <AssigneePicker visible={pickerVisible} onDismiss={() => setPickerVisible(false)} users={usersList} onSelect={async (u) => {
               if (!selectedOrder) { setPickerVisible(false); return; }
+              // check assignment: if customer assigned to selected employee
               try {
-                const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ assignedToId: u.id }) });
+                if (!selectedOrder.customerId) {
+                  // no customer: proceed with assign
+                  const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ assignedToId: u.id }) });
+                  if (res.ok) { selectedOrder.assignedTo = u; selectedOrder.assignedToId = u.id; setSelectedOrder({ ...selectedOrder }); fetchData(); try { triggerRefresh(); } catch (e) {} } else { const err = await parseErrorResponse(res); if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) { setAssignConfirm({ visible: true, order: selectedOrder, employeeId: u.id, mode: 'assign' }); } else { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); } }
+                  setPickerVisible(false);
+                  return;
+                }
+                const aRes = await fetch(`${API_URL}/assignments?employeeId=${u.id}&customerId=${selectedOrder.customerId}`, { headers: buildHeaders(token) });
+                const aData = aRes.ok ? await aRes.json() : [];
+                if (!Array.isArray(aData) || aData.length === 0) {
+                  // show confirm to create assignment then assign
+                  setAssignConfirm({ visible: true, order: selectedOrder, employeeId: u.id, mode: 'assign' });
+                  setPickerVisible(false);
+                  return;
+                }
+                // assignment exists: perform assign
+                const res = await fetch(`${API_URL}/orders/${selectedOrder.id}/assign`, { method: 'PUT', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ assignedToId: u.id }) });
                 if (res.ok) {
-                  // update local selectedOrder
                   selectedOrder.assignedTo = u;
                   selectedOrder.assignedToId = u.id;
-                  // when assigning, backend may set status to in_progress
-                  const body = await parseErrorResponse(res);
-                  try { swipeableRefs.current.get(selectedOrder.id)?.close(); } catch(e) {}
-                  // refetch list
                   setSelectedOrder({ ...selectedOrder });
-                  fetchData();
-                  try { triggerRefresh(); } catch (e) {}
-                } else {
-                  const err = await parseErrorResponse(res); setToast({ visible: true, message: err.error || 'Errore assegnazione', type: 'error' });
-                }
-              } catch (e) { console.error(e); }
+                  fetchData(); try { triggerRefresh(); } catch (e) {}
+                } else { const err = await parseErrorResponse(res); if (err?.raw && (err.raw.error === 'mapping_required' || err.raw.mappingRequired)) { setAssignConfirm({ visible: true, order: selectedOrder, employeeId: u.id, mode: 'assign' }); } else { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); } }
+                } catch (e) { console.error(e); showToast('Errore assegnazione', 'error'); }
               setPickerVisible(false);
             }} roleFilter={['employee','admin']} title={'Seleziona assegnatario'} />
         </Dialog>
@@ -876,18 +990,18 @@ export default function OrdersScreen({ navigation }) {
               try {
                 if (showTrash) {
                   // permanent delete
-                  const res = await fetch(`${API_URL}/orders/${orderToDelete.id}?permanent=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+                  const res = await fetch(`${API_URL}/orders/${orderToDelete.id}?permanent=true`, { method: 'DELETE', headers: buildHeaders(token) });
                   if (res.ok) {
-                    setToast({ visible: true, message: 'Ordine eliminato definitivamente', type: 'success' });
+                    showToast('Ordine eliminato definitivamente', 'success');
                   } else {
                     const parsed = await parseErrorResponse(res);
-                    setToast({ visible: true, message: parsed.error || 'Errore eliminazione', type: 'error' });
+                    { const safe = safeMessageFromData(parsed.raw || parsed, 'Errore eliminazione'); showToast(safe, 'error'); }
                   }
                 } else {
                   // soft-delete (move to trash)
-                  const res = await fetch(`${API_URL}/orders/${orderToDelete.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-                  if (res.ok) setToast({ visible: true, message: 'Ordine spostato nel cestino', type: 'success' });
-                  else { const parsed = await parseErrorResponse(res); setToast({ visible: true, message: parsed.error || 'Errore eliminazione', type: 'error' }); }
+                  const res = await fetch(`${API_URL}/orders/${orderToDelete.id}`, { method: 'DELETE', headers: buildHeaders(token) });
+                  if (res.ok) showToast('Ordine spostato nel cestino', 'success');
+                  else { const parsed = await parseErrorResponse(res); const safe = safeMessageFromData(parsed.raw || parsed, 'Errore eliminazione'); showToast(safe, 'error'); }
                 }
                 setDeleteDialogVisible(false);
                 setOrderToDelete(null);
@@ -896,9 +1010,80 @@ export default function OrdersScreen({ navigation }) {
                 console.error('Errore delete order', e);
                 setDeleteDialogVisible(false);
                 setOrderToDelete(null);
-                setToast({ visible: true, message: `Errore eliminazione: ${e?.message || 'sconosciuto'}`, type: 'error' });
+                showToast('Errore eliminazione', 'error');
               }
             }}>{showTrash ? 'Elimina definitivamente' : 'Sposta nel cestino'}</Button>
+          </Dialog.Actions>
+        </Dialog>
+        {/* Confirm assign dialog: shown when customer is not assigned to selected employee */}
+        <Dialog visible={assignConfirm.visible} onDismiss={() => setAssignConfirm({ visible: false, order: null })}>
+          <Dialog.Title>Cliente non assegnato</Dialog.Title>
+          <Dialog.Content>
+            <Text>questo cliente non è asseganto a questo dipendente, lo si vuole assegnare?</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+                    <Button onPress={() => { setAssignConfirm({ visible: false, order: null, employeeId: null, mode: null }); showToast('Azione annullata', 'warning'); }}>No, annulla</Button>
+            <Button mode="contained" onPress={async () => {
+              if (!assignConfirm.order) return;
+              const ord = assignConfirm.order;
+              const empId = assignConfirm.employeeId;
+              const mode = assignConfirm.mode;
+              setAssignConfirm({ ...assignConfirm, loading: true });
+              try {
+                const aRes = await fetch(`${API_URL}/assignments`, { method: 'POST', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ customerId: ord.customerId, employeeId: empId }) });
+                const aJ = await aRes.json().catch(() => null);
+                    if (!aRes.ok) {
+                    // If server indicates mapping required, re-open dialog; otherwise show generic error
+                    if (aJ && (aJ.error === 'mapping_required' || aJ.mappingRequired)) {
+                      setAssignConfirm({ visible: true, order: ord, employeeId: empId, mode });
+                      return;
+                    }
+                    const err = await parseErrorResponse(aRes);
+                    { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione cliente'); showToast(safe, 'error'); }
+                    setAssignConfirm({ visible: false, order: null, employeeId: null, mode: null });
+                    return;
+                  }
+                // proceed based on mode
+                setAssignConfirm({ visible: false, order: null, employeeId: null, mode: null });
+                if (mode === 'send') {
+                  const statusRes = await changeOrderStatus(ord.id, 'pending');
+                  if (statusRes && statusRes.ok) { fetchData(); try { triggerRefresh(); } catch(e){} }
+                  else if (statusRes && statusRes.mappingRequired) { showToast('Assegnazione richiesta, riprova.'); }
+                } else if (mode === 'assign') {
+                  const r = await fetch(`${API_URL}/orders/${ord.id}/assign`, { method: 'PUT', headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify({ assignedToId: empId }) });
+                  const jr = await r.json().catch(() => null);
+                  if (!r.ok) {
+                    if (jr && (jr.error === 'mapping_required' || jr.mappingRequired)) {
+                      setAssignConfirm({ visible: true, order: ord, employeeId: empId, mode: 'assign' });
+                      return;
+                    }
+                    const err = await parseErrorResponse(r);
+                    { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); }
+                  } else {
+                    showToast('Ordine assegnato', 'success');
+                    fetchData(); try { triggerRefresh(); } catch(e){}
+                  }
+                } else if (mode === 'assignToMe') {
+                  const r = await fetch(`${API_URL}/orders/${ord.id}/assign-to-me`, { method: 'POST', headers: buildHeaders(token) });
+                  const jr = await r.json().catch(() => null);
+                  if (!r.ok) {
+                    if (jr && (jr.error === 'mapping_required' || jr.mappingRequired)) {
+                      setAssignConfirm({ visible: true, order: ord, employeeId: empId, mode: 'assignToMe' });
+                      return;
+                    }
+                    const err = await parseErrorResponse(r);
+                    { const safe = safeMessageFromData(err.raw || err, 'Errore assegnazione'); showToast(safe, 'error'); }
+                  } else {
+                    showToast('Assegnato a te', 'success');
+                    fetchData(); try { triggerRefresh(); } catch(e){}
+                  }
+                }
+              } catch (e) {
+                console.error('create assignment', e);
+                showToast('Errore durante assegnazione', 'error');
+                setAssignConfirm({ visible: false, order: null, employeeId: null, mode: null });
+              }
+            }}>Assegna e procedi</Button>
           </Dialog.Actions>
         </Dialog>
         {/* Bulk delete confirmation dialog */}
@@ -915,18 +1100,18 @@ export default function OrdersScreen({ navigation }) {
               try {
                 if (showTrash) {
                   // permanent delete in bulk
-                  const delPromises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}?permanent=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }));
+                  const delPromises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}?permanent=true`, { method: 'DELETE', headers: buildHeaders(token) }));
                   const results = await Promise.all(delPromises);
                   let successCount = 0;
                   for (const r of results) if (r.ok) successCount += 1;
-                  setToast({ visible: true, message: `Eliminati definitivamente ${successCount} / ${selectedIds.length} ordini`, type: successCount === selectedIds.length ? 'success' : 'warning' });
+                  showToast(`Eliminati definitivamente ${successCount} / ${selectedIds.length} ordini`, successCount === selectedIds.length ? 'success' : 'warning');
                 } else {
                   // move to trash (soft-delete)
-                  const delPromises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }));
+                  const delPromises = selectedIds.map(id => fetch(`${API_URL}/orders/${id}`, { method: 'DELETE', headers: buildHeaders(token) }));
                   const results = await Promise.all(delPromises);
                   let successCount = 0;
                   for (const r of results) if (r.ok) successCount += 1;
-                  setToast({ visible: true, message: `Spostati nel cestino ${successCount} / ${selectedIds.length} ordini`, type: successCount === selectedIds.length ? 'success' : 'warning' });
+                  showToast(`Spostati nel cestino ${successCount} / ${selectedIds.length} ordini`, successCount === selectedIds.length ? 'success' : 'warning');
                 }
                 // refresh list
                 setSelectionMode(false);
@@ -935,13 +1120,13 @@ export default function OrdersScreen({ navigation }) {
                 try { triggerRefresh(); } catch (e) {}
               } catch (e) {
                 console.error('Bulk delete error', e);
-                setToast({ visible: true, message: `Errore eliminazione: ${e?.message || 'sconosciuto'}`, type: 'error' });
+                showToast('Errore eliminazione', 'error');
               }
             }} color="#E53935">{showTrash ? 'Elimina definitivamente' : 'Sposta nel cestino'}</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
-      <FloatingToast visible={toast?.visible} message={toast?.message} type={toast?.type || 'info'} onHide={() => setToast({ ...toast, visible: false })} />
+  {/* Global toast host handles toasts now - no local FloatingToast here */}
     </View>
   );
 }

@@ -1,18 +1,22 @@
 import React, { useEffect, useState, useContext } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, FlatList, StatusBar, Share } from 'react-native';
-import { Text, Card, Button, FAB, Dialog, Portal, TextInput, ActivityIndicator, IconButton } from 'react-native-paper';
+import { Text, Card, Button, FAB, Dialog, Portal, ActivityIndicator, IconButton, TextInput } from 'react-native-paper';
 import { AuthContext } from '../context/AuthContext';
+import { buildHeaders } from '../utils/api';
 import { SyncContext } from '../context/SyncContext';
 import SearchInput from '../components/SearchInput';
+import RequiredTextInput from '../components/RequiredTextInput';
 import { API_URL } from '../config';
-import FloatingToast from '../components/FloatingToast';
+import { showToast } from '../utils/toastService';
+import { safeMessageFromData } from '../utils/errorUtils';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 export default function ProductsScreen() {
   const { token, user } = useContext(AuthContext);
-  const { triggerRefresh } = useContext(SyncContext);
+  const { triggerRefresh, refreshKey } = useContext(SyncContext);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -23,10 +27,9 @@ export default function ProductsScreen() {
   const [sku, setSku] = useState('');
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  const [toastVisible, setToastVisible] = useState(false);
-  const [toastMsg, setToastMsg] = useState('');
-  const [toastType, setToastType] = useState('success');
+  // local toast state removed; use global showToast
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [productToDelete, setProductToDelete] = useState(null);
   const [forceDeleteCandidate, setForceDeleteCandidate] = useState(null);
@@ -42,15 +45,16 @@ export default function ProductsScreen() {
   const [tooltip, setTooltip] = useState({ visible: false, text: '', bottom: 0 });
  
 
-  const showToast = (msg, type = 'success') => {
-    setToastMsg(msg);
-    setToastType(type);
-    setToastVisible(true);
-  };
+  // reuse global showToast
+
+  const onFieldInvalid = (fieldName) => {
+    setFieldErrors(e => ({ ...e, [fieldName]: true }));
+    showToast(`Campo ${fieldName} obbligatorio`, 'error');
+  }
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch(`${API_URL}/products`, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API_URL}/products`, { headers: buildHeaders(token) });
       const data = await res.json();
       if (res.ok) setProducts(data);
     } catch (err) {
@@ -60,7 +64,16 @@ export default function ProductsScreen() {
     }
   };
 
-  useEffect(() => { if (token) fetchProducts(); }, [token]);
+  useEffect(() => { if (token) { setLoading(true); fetchProducts(); } }, [token, refreshKey]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      return () => {
+        // clear field errors when navigating away
+        try { setFieldErrors({}); } catch (e) { }
+      };
+    }, [])
+  );
 
   const filteredProducts = products.filter(p => {
     if (!search) return true;
@@ -103,21 +116,21 @@ export default function ProductsScreen() {
       // enforce two decimals on price
       const parsedPrice = isNaN(parseFloat(price)) ? 0 : Math.round(parseFloat(price) * 100) / 100;
       const body = { name, sku, price: parsedPrice, stock: parseInt(stock || 0) };
-      const res = await fetch(url, { method, headers: { 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  const res = await fetch(url, { method, headers: buildHeaders(token, { 'Content-Type':'application/json' }), body: JSON.stringify(body) });
       if (res.ok) {
         fetchProducts(); setShowDialog(false); showToast(editing ? 'Prodotto aggiornato' : 'Prodotto creato', 'success');
         try { triggerRefresh(); } catch (e) { /* ignore */ }
       } else {
-        const err = await res.json(); showToast(err.error || 'Errore', 'error');
+        const err = await res.json(); const safe = safeMessageFromData(err, 'Errore'); showToast(safe, 'error');
       }
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
   };
 
   const handleDelete = async (p) => {
     try {
-      const res = await fetch(`${API_URL}/products/${p.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API_URL}/products/${p.id}`, { method: 'DELETE', headers: buildHeaders(token) });
   if (res.ok) { fetchProducts(); showToast('Prodotto eliminato', 'success'); try { triggerRefresh(); } catch (e) { } }
-      else { const err = await res.json(); showToast(err.error || 'Errore', 'error'); }
+  else { const err = await res.json(); const safe = safeMessageFromData(err, 'Errore'); showToast(safe, 'error'); }
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
   };
 
@@ -129,9 +142,9 @@ export default function ProductsScreen() {
   const handleForceDelete = async () => {
     if (!forceDeleteCandidate) return;
     try {
-      const res = await fetch(`${API_URL}/products/${forceDeleteCandidate.id}?force=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API_URL}/products/${forceDeleteCandidate.id}?force=true`, { method: 'DELETE', headers: buildHeaders(token) });
   if (res.ok) { fetchProducts(); showToast('Prodotto eliminato (forzato)', 'success'); try { triggerRefresh(); } catch (e) { } }
-      else { const err = await res.json(); showToast(err.error || 'Errore', 'error'); }
+      else { const err = await res.json().catch(() => ({})); const safe = safeMessageFromData(err, 'Errore eliminazione'); showToast(safe, 'error'); }
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
     setForceDeleteCandidate(null);
     setShowForceDeleteConfirm(false);
@@ -140,17 +153,21 @@ export default function ProductsScreen() {
   const handleConfirmDelete = async () => {
     if (!productToDelete) return;
     try {
-      const res = await fetch(`${API_URL}/products/${productToDelete.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API_URL}/products/${productToDelete.id}`, { method: 'DELETE', headers: buildHeaders(token) });
       if (res.ok) {
         fetchProducts(); showToast('Prodotto eliminato', 'success');
       } else {
         const data = await res.json();
         // if deletion prevented due to references, offer force delete
-        if (data && data.error && data.error.toLowerCase().includes('impossibile eliminare')) {
+        const rawErr = data && data.error ? String(data.error).toLowerCase() : '';
+        if (rawErr && rawErr.includes('impossibile eliminare')) {
+          // keep the specific flow for 'impossibile eliminare' which triggers force delete
           setForceDeleteCandidate(productToDelete);
           setShowForceDeleteConfirm(true);
         } else {
-          showToast(data.error || 'Errore eliminazione', 'error');
+          // sanitize any server-provided message before showing
+          const safe = safeMessageFromData(data || {}, 'Errore eliminazione');
+          showToast(safe, 'error');
         }
       }
     } catch (err) { console.error(err); showToast('Errore server', 'error'); }
@@ -201,16 +218,17 @@ export default function ProductsScreen() {
             setShowExportDialog(true);
             setExportCsv('');
             setExporting(true);
-            try {
-              const res = await fetch(`${API_URL}/products/export`, { headers: { Authorization: `Bearer ${token}` } });
-              if (res.ok) {
-                const text = await res.text();
-                setExportCsv(text);
-              } else {
-                const err = await res.json();
-                showToast(err.error || 'Errore export', 'error');
-                setShowExportDialog(false);
-              }
+              try {
+                const res = await fetch(`${API_URL}/products/export`, { headers: buildHeaders(token) });
+                if (res.ok) {
+                  const text = await res.text();
+                  setExportCsv(text);
+                } else {
+                  const err = await res.json().catch(() => ({}));
+                  const safe = safeMessageFromData(err, 'Errore export');
+                  showToast(safe, 'error');
+                  setShowExportDialog(false);
+                }
             } catch (err) { console.error('Export error', err); showToast('Errore server', 'error'); setShowExportDialog(false); }
             setExporting(false);
           }} onLongPress={() => { setTooltip({ visible: true, text: 'Esporta CSV', bottom: 20 }); setTimeout(() => setTooltip({ visible: false, text: '', bottom: 0 }), 1400); }} color="#fff" />
@@ -234,7 +252,7 @@ export default function ProductsScreen() {
                   const formData = new FormData();
                   formData.append('file', { uri, name: fileName, type: 'text/csv' });
                   try {
-                    const uploadRes = await fetch(`${API_URL}/products/import`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+                    const uploadRes = await fetch(`${API_URL}/products/import`, { method: 'POST', headers: buildHeaders(token), body: formData });
                     const data = await uploadRes.json();
                     if (uploadRes.ok) {
                       setImportReport(data);
@@ -242,9 +260,10 @@ export default function ProductsScreen() {
                       showToast('Import completato', 'success');
                       try { triggerRefresh(); } catch (e) { }
                     } else {
-                      setImportReport(data);
-                      showToast(data.error || 'Errore import', 'error');
-                    }
+                        setImportReport(data);
+                        const safe = safeMessageFromData(data, 'Errore import');
+                        showToast(safe, 'error');
+                      }
                   } catch (uerr) { console.error('Upload error', uerr); showToast('Errore upload', 'error'); }
                   setImporting(false);
                 }
@@ -309,10 +328,10 @@ export default function ProductsScreen() {
         <Dialog visible={showDialog} onDismiss={() => setShowDialog(false)} style={styles.dialog}>
           <Dialog.Title>{editing ? 'Modifica prodotto' : 'Nuovo prodotto'}</Dialog.Title>
           <Dialog.Content>
-            <TextInput label="Nome" value={name} onChangeText={setName} style={styles.input} />
-            <TextInput label="SKU" value={sku} onChangeText={setSku} style={styles.input} />
-            <TextInput label="Prezzo" value={price} onChangeText={handlePriceChange} keyboardType="numeric" style={styles.input} />
-            <TextInput label="Stock" value={stock} onChangeText={setStock} keyboardType="numeric" style={styles.input} />
+            <RequiredTextInput label="Nome" name="Nome" required value={name} onChangeText={setName} onInvalid={onFieldInvalid} style={styles.input} showError={!!fieldErrors.Nome} />
+            <RequiredTextInput label="SKU" name="SKU" value={sku} onChangeText={setSku} onInvalid={onFieldInvalid} style={styles.input} />
+            <RequiredTextInput label="Prezzo" name="Prezzo" required value={price} onChangeText={handlePriceChange} keyboardType="numeric" onInvalid={onFieldInvalid} style={styles.input} showError={!!fieldErrors.Prezzo} />
+            <RequiredTextInput label="Stock" name="Stock" value={stock} onChangeText={setStock} keyboardType="numeric" onInvalid={onFieldInvalid} style={styles.input} />
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setShowDialog(false)}>Annulla</Button>
@@ -346,7 +365,7 @@ export default function ProductsScreen() {
         </Dialog>
       </Portal>
 
-      <FloatingToast visible={toastVisible} message={toastMsg} type={toastType} onHide={() => setToastVisible(false)} />
+  {/* FloatingToast moved to global host; use showToast(msg, type) */}
       {tooltip.visible && (
         <View pointerEvents="none" style={[styles.tooltip, { bottom: tooltip.bottom }]}> 
           <Text style={styles.tooltipText}>{tooltip.text}</Text>
