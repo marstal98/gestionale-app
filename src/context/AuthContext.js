@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from '../config';
 import { buildHeaders } from '../utils/api';
+import notificationService from '../services/notificationService';
 
 export const AuthContext = createContext();
 
@@ -23,11 +24,24 @@ export const AuthProvider = ({ children }) => {
 
         if (storedToken && storedUser) {
           setToken(storedToken);
-          setUser(JSON.parse(storedUser));
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
           if (storedRefresh) setRefreshToken(storedRefresh);
+          
+          // Initialize notification service on startup
+          try {
+            const pushToken = await notificationService.initialize();
+            if (pushToken) {
+              await notificationService.registerTokenWithBackend(parsedUser.id, parsedUser.role, storedToken);
+              console.log('✅ Notifiche inizializzate all\'avvio per:', parsedUser.email);
+            }
+          } catch (e) {
+            console.warn('Could not initialize notifications on startup', e);
+          }
+          
           // schedule timers for an existing token so refresh happens silently
           try {
-            scheduleTimers(storedToken, JSON.parse(storedUser), storedRefresh);
+            scheduleTimers(storedToken, parsedUser, storedRefresh);
           } catch (e) {
             console.warn('Could not schedule timers on startup', e);
           }
@@ -40,6 +54,18 @@ export const AuthProvider = ({ children }) => {
             if (fetched) {
               setUser(fetched);
               await AsyncStorage.setItem('user', JSON.stringify(fetched));
+              
+              // Initialize notification service
+              try {
+                const pushToken = await notificationService.initialize();
+                if (pushToken) {
+                  await notificationService.registerTokenWithBackend(fetched.id, fetched.role, storedToken);
+                  console.log('✅ Notifiche inizializzate per utente recuperato:', fetched.email);
+                }
+              } catch (e) {
+                console.warn('Could not initialize notifications for fetched user', e);
+              }
+              
               scheduleTimers(storedToken, fetched, storedRefresh);
             } else {
               // token invalid or server unreachable: clear token to force login
@@ -159,6 +185,17 @@ export const AuthProvider = ({ children }) => {
     await AsyncStorage.setItem('user', JSON.stringify(userObj));
   console.log('[AuthContext] login() set user', { email: userObj.email, role: userObj.role });
 
+    // Initialize notification service after login
+    try {
+      const pushToken = await notificationService.initialize();
+      if (pushToken) {
+        await notificationService.registerTokenWithBackend(userObj.id, userObj.role, tokenToUse);
+        console.log('✅ Notifiche inizializzate per utente:', userObj.email);
+      }
+    } catch (e) {
+      console.warn('Could not initialize notifications on login', e);
+    }
+
     // schedule timers for token expiry/refresh
     try {
       scheduleTimers(tokenToUse, userObj, refreshToUse);
@@ -182,6 +219,9 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
+      // Unregister from notifications before logout
+      await notificationService.unregisterFromNotifications();
+      
       await AsyncStorage.removeItem("token");
       await AsyncStorage.removeItem("user");
       await AsyncStorage.removeItem('refreshToken');

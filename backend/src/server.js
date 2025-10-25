@@ -12,6 +12,7 @@ import debugRoutes from "./routes/debugRoutes.js";
 import inventoryRoutes from "./routes/inventoryRoutes.js";
 import adminWeb from './routes/adminWeb.js';
 import assignmentRoutes from './routes/assignmentRoutes.js';
+import { router as notificationRoutes } from './routes/notificationRoutes.js';
 
 dotenv.config();
 
@@ -51,6 +52,15 @@ app.all('/debug-method', (req, res) => {
 	res.json({ method: req.method, url: req.originalUrl });
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+	res.json({ 
+		status: 'ok', 
+		timestamp: new Date().toISOString(),
+		message: 'Backend server is running'
+	});
+});
+
 // Rotte
 app.use("/api/auth", authRoutes);
 // Debugging middleware for /api/users to capture incoming requests and help diagnose Not Found
@@ -81,6 +91,7 @@ app.use("/api/orders", orderRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use("/api/debug", debugRoutes);
 app.use("/api/inventory", inventoryRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // Minimal admin web UI
 app.use('/admin', adminWeb);

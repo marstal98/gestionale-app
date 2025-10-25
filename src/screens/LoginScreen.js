@@ -1,5 +1,5 @@
 import React, { useState, useContext, useCallback } from "react";
-import { View, StyleSheet, Animated, TouchableOpacity } from "react-native";
+import { View, StyleSheet, Animated, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import { TextInput, Button, Text, IconButton, Portal, Dialog, Paragraph, ActivityIndicator } from "react-native-paper";
 import RequiredTextInput from '../components/RequiredTextInput';
 import { showToast } from '../utils/toastService';
@@ -9,6 +9,15 @@ import { API_URL, MIN_LOGIN_SPINNER_MS } from "../config";
 import { useDeepLinkHandler, parseTokenFromUrl } from '../components/DeepLinkHandler';
 import { safeMessageFromData } from '../utils/errorUtils';
 import PasswordInput from '../components/PasswordInput';
+import { 
+  useResponsive, 
+  wp, 
+  hp, 
+  getSpacing, 
+  getComponentSize, 
+  scaleFontSize, 
+  createResponsiveStyles 
+} from '../utils/responsive';
 
 export default function LoginScreen({ navigation, route }) {
   const [email, setEmail] = useState("");
@@ -19,6 +28,7 @@ export default function LoginScreen({ navigation, route }) {
   const [helpVisible, setHelpVisible] = useState(false);
 
   const { login, setAuthProcessing } = useContext(AuthContext);
+  const { isTablet, deviceType } = useResponsive();
 
   // deep link handler: if app opened with gestionexus://accept-invite?token=... navigate
   const handleLink = useCallback((url) => {
@@ -127,40 +137,122 @@ export default function LoginScreen({ navigation, route }) {
   } catch (e) { console.error('Forgot error', e); showToast('Impossibile contattare il server', 'error'); }
   };
 
+  const responsiveStyles = createResponsiveStyles(({ isTablet, getSpacing, getComponentSize, scaleFontSize }) => ({
+    container: {
+      flex: 1,
+      backgroundColor: "#fff",
+      padding: getSpacing(20),
+      justifyContent: "center",
+      alignItems: "center"
+    },
+    formContainer: {
+      width: isTablet ? wp(60) : wp(90),
+      maxWidth: isTablet ? 500 : 400,
+      alignSelf: "center"
+    },
+    title: {
+      fontSize: scaleFontSize(26),
+      fontWeight: "600",
+      textAlign: "center",
+      marginBottom: getSpacing(30),
+      color: "#333"
+    },
+    input: {
+      marginBottom: getSpacing(15),
+      height: getComponentSize('inputHeight')
+    },
+    button: {
+      marginTop: getSpacing(20),
+      height: getComponentSize('buttonHeight'),
+      justifyContent: 'center'
+    },
+    buttonsRow: {
+      flexDirection: isTablet ? 'row' : 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginVertical: getSpacing(10),
+      flexWrap: 'wrap'
+    },
+    buttonGroup: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: getSpacing(5)
+    },
+    spacer: {
+      width: getSpacing(12)
+    }
+  }));
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Accedi</Text>
-
-      <RequiredTextInput
-        label="Email"
-        name="Email"
-        required
-        value={email}
-        onChangeText={setEmail}
-        mode="outlined"
-        style={styles.input}
-      />
-
-      <PasswordInput label="Password" value={password} onChangeText={setPassword} required style={styles.input} />
-
-  <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }}>
-    <Button onPress={() => setForgotVisible(true)} mode="text">Hai dimenticato la password?</Button>
-    <View style={{ width: 12 }} />
-    <Button onPress={() => navigation.navigate('RequestAccess')} mode="text">Richiedi accesso</Button>
-    <TouchableOpacity accessibilityLabel="Spiegazione modalità accesso" onPress={() => setHelpVisible(true)} style={{ marginLeft: 6 }}>
-      <IconButton icon="help-circle-outline" size={22} color="#7E57C2" accessibilityLabel="Aiuto accesso" />
-    </TouchableOpacity>
-  </View>
-
-      <Button
-        mode="contained"
-        onPress={handleLogin}
-        loading={loading}
-        disabled={loading}
-        style={styles.button}
+    <KeyboardAvoidingView 
+      style={{ flex: 1 }} 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView 
+        contentContainerStyle={responsiveStyles.container}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        Accedi
-      </Button>
+        <View style={responsiveStyles.formContainer}>
+          <Text style={responsiveStyles.title}>Accedi</Text>
+
+          <RequiredTextInput
+            label="Email"
+            name="Email"
+            required
+            value={email}
+            onChangeText={setEmail}
+            mode="outlined"
+            style={responsiveStyles.input}
+          />
+
+          <PasswordInput 
+            label="Password" 
+            value={password} 
+            onChangeText={setPassword} 
+            required 
+            style={responsiveStyles.input} 
+          />
+
+          <View style={responsiveStyles.buttonsRow}>
+            <View style={responsiveStyles.buttonGroup}>
+              <Button onPress={() => setForgotVisible(true)} mode="text">
+                Hai dimenticato la password?
+              </Button>
+              {isTablet && <View style={responsiveStyles.spacer} />}
+            </View>
+            
+            <View style={responsiveStyles.buttonGroup}>
+              <Button onPress={() => navigation.navigate('RequestAccess')} mode="text">
+                Richiedi accesso
+              </Button>
+              <TouchableOpacity 
+                accessibilityLabel="Spiegazione modalità accesso" 
+                onPress={() => setHelpVisible(true)} 
+                style={{ marginLeft: 6 }}
+              >
+                <IconButton 
+                  icon="help-circle-outline" 
+                  size={getComponentSize('iconSize')} 
+                  iconColor="#7E57C2" 
+                  accessibilityLabel="Aiuto accesso" 
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Button
+            mode="contained"
+            onPress={handleLogin}
+            loading={loading}
+            disabled={loading}
+            style={responsiveStyles.button}
+          >
+            Accedi
+          </Button>
+        </View>
+      </ScrollView>
+      
       {/* Loading overlay */}
       {loading && (
         <Animated.View style={styles.loadingOverlay} pointerEvents="auto">
@@ -170,8 +262,7 @@ export default function LoginScreen({ navigation, route }) {
           </View>
         </Animated.View>
       )}
-      {/* Global toast host handles toasts */}
-
+      
       <Portal>
         <Dialog visible={forgotVisible} onDismiss={() => setForgotVisible(false)}>
           <Dialog.Title>Reset password</Dialog.Title>
@@ -198,15 +289,11 @@ export default function LoginScreen({ navigation, route }) {
           </Dialog.Actions>
         </Dialog>
       </Portal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 20, backgroundColor: "#fff" },
-  title: { fontSize: 26, fontWeight: "600", textAlign: "center", marginBottom: 30 },
-  input: { marginBottom: 15 },
-  button: { marginTop: 20 },
   loadingOverlay: {
     position: "absolute",
     top: 0,

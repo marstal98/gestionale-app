@@ -15,10 +15,21 @@ import { AuthContext } from "../context/AuthContext";
 import { SyncContext } from "../context/SyncContext";
 import { API_URL } from "../config";
 import { buildHeaders } from '../utils/api';
+import { 
+  useResponsive, 
+  wp, 
+  hp, 
+  getSpacing, 
+  getComponentSize, 
+  scaleFontSize, 
+  createResponsiveStyles 
+} from '../utils/responsive';
 
 export default function OrdersScreen({ navigation }) {
   const { token, user } = useContext(AuthContext);
   const { triggerRefresh, refreshKey } = useContext(SyncContext);
+  const { isTablet, deviceType } = useResponsive();
+  
   // store raw server items here and derive `orders` (active vs trash) from it
   const [apiItems, setApiItems] = useState([]);
   const [products, setProducts] = useState([]);

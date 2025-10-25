@@ -46,6 +46,8 @@ model User {
   customerAssignmentsAsEmployee CustomerAssignment[] @relation("EmployeeAssignments")
   // assignments: employees assigned to this user (when acting as customer)
   customerAssignmentsAsCustomer CustomerAssignment[] @relation("CustomerAssignments")
+  // push notification tokens for this user
+  pushTokens            PushToken[]     @relation("UserPushTokens")
   createdAt             DateTime        @default(now())
 }
 
@@ -160,4 +162,20 @@ model Invitation {
   expiresAt   DateTime
   usedAt      DateTime?
   createdAt   DateTime  @default(now())
+}
+
+// Push notification tokens for mobile devices
+model PushToken {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  user       User     @relation("UserPushTokens", fields: [userId], references: [id])
+  userId     Int
+  platform   String   @default("unknown") // ios, android, web
+  deviceId   String?
+  isActive   Boolean  @default(true)
+  lastUsed   DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([isActive])
 }

@@ -74,7 +74,7 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./dist
 
-  # Job 3: Build Mobile (quando sarà il momento)
+  # Job 3: Build Mobile
   build-mobile:
     name: Build Mobile Apps
     runs-on: ubuntu-latest
@@ -101,12 +101,26 @@ jobs:
         eas-version: latest
         token: ${{ secrets.EXPO_TOKEN }}
         
-    - name: Build Android APK
-      run: eas build --platform android --non-interactive
+    - name: Pre-build validation
+      run: npm run pre-build
       
-    - name: Build iOS IPA
-      run: eas build --platform ios --non-interactive
-      if: runner.os == 'macOS'
+    - name: Build Android Preview
+      run: eas build --platform android --profile preview --non-interactive
+      
+    - name: Build iOS Preview  
+      run: eas build --platform ios --profile preview --non-interactive
+      
+    - name: Comment PR with build links
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '🚀 Mobile builds triggered! Check [EAS Dashboard](https://expo.dev/builds) for progress.'
+          });
 
   # Job 4: Notificazioni e Report
   notify:

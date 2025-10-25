@@ -9,7 +9,18 @@ import MiniBarChart from "../components/MiniBarChart";
 import QuickList from "../components/QuickList";
 import TopMetrics from "../components/TopMetrics";
 import RecentOrdersCard from "../components/RecentOrdersCard";
+import BackendIntegrationTest from "../components/BackendIntegrationTest";
 import { API_URL } from "../config";
+import { 
+  useResponsive, 
+  wp, 
+  hp, 
+  getSpacing, 
+  getComponentSize, 
+  scaleFontSize, 
+  createResponsiveStyles,
+  getGridLayout 
+} from '../utils/responsive';
 
 export default function DashboardScreen({ navigation }) {
   const { user, logout } = useContext(AuthContext);
@@ -21,8 +32,9 @@ export default function DashboardScreen({ navigation }) {
 
   // mock fetch - replace with real API calls if available
   const { token } = useContext(AuthContext);
-
   const { refreshKey } = useContext(SyncContext);
+  const { isTablet, deviceType } = useResponsive();
+  const gridLayout = getGridLayout();
 
   useEffect(() => {
     const loadData = async () => {
@@ -130,45 +142,133 @@ export default function DashboardScreen({ navigation }) {
     loadData();
   }, [token, refreshKey]);
 
-  // Admin layout
-  // set logout icon in header
-  // header hidden by navigator options (no top navigation on Home)
+  // Stili responsive
+  const responsiveStyles = createResponsiveStyles(({ isTablet, getSpacing, scaleFontSize, getComponentSize }) => ({
+    container: {
+      flex: 1,
+      backgroundColor: '#F9F9FB'
+    },
+    contentContainer: {
+      padding: getSpacing(16),
+      paddingTop: getSpacing(48),
+      maxWidth: isTablet ? wp(90) : '100%',
+      alignSelf: 'center',
+      width: '100%'
+    },
+    headerRow: {
+      flexDirection: isTablet ? 'row' : 'column',
+      alignItems: isTablet ? 'center' : 'flex-start',
+      marginBottom: getSpacing(12),
+      justifyContent: 'space-between'
+    },
+    headerContent: {
+      flex: 1
+    },
+    title: {
+      fontSize: scaleFontSize(20),
+      fontWeight: '700',
+      marginBottom: getSpacing(4),
+      paddingTop: getSpacing(12)
+    },
+    subtitle: {
+      color: '#666',
+      fontSize: scaleFontSize(14),
+      marginBottom: isTablet ? 0 : getSpacing(8)
+    },
+    section: {
+      marginBottom: getSpacing(18)
+    },
+    sectionTitle: {
+      fontWeight: '700',
+      marginBottom: getSpacing(8),
+      fontSize: scaleFontSize(16)
+    },
+    buttonsContainer: {
+      flexDirection: isTablet ? 'row' : 'column',
+      gap: getSpacing(8)
+    },
+    button: {
+      marginTop: getSpacing(8),
+      flex: isTablet ? 1 : undefined
+    },
+    gridContainer: {
+      flexDirection: isTablet ? 'row' : 'column',
+      gap: getSpacing(16)
+    },
+    gridItem: {
+      flex: isTablet ? 1 : undefined
+    }
+  }));
 
+  // Admin layout
   if (user?.role === 'admin') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
-        <View style={[styles.headerRow, { alignItems: 'center' }] }>
-          <View>
-            <Text style={styles.title}>Benvenuto, {user?.name}</Text>
-            <Text style={{ color: '#666' }}>Panoramica rapida delle attività</Text>
+      <ScrollView 
+        style={responsiveStyles.container} 
+        contentContainerStyle={responsiveStyles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={responsiveStyles.headerRow}>
+          <View style={responsiveStyles.headerContent}>
+            <Text style={responsiveStyles.title}>Benvenuto, {user?.name}</Text>
+            <Text style={responsiveStyles.subtitle}>Panoramica rapida delle attività</Text>
           </View>
           <IconButton
             icon="logout-variant"
-            size={24}
-            color={theme.colors.primary}
+            size={getComponentSize('iconSize')}
+            iconColor={theme.colors.primary}
             onPress={logout}
             accessibilityLabel="Logout"
-            style={{ marginLeft: 'auto' }}
           />
         </View>
 
-        <TopMetrics metrics={stats} />
+        <View style={responsiveStyles.section}>
+          <TopMetrics metrics={stats} />
+        </View>
 
-        <View style={styles.section}>
-          <Text style={{ fontWeight: '700', marginBottom: 8 }}>Andamento ordini (ultimi 30 giorni)</Text>
+        <View style={responsiveStyles.section}>
+          <Text style={responsiveStyles.sectionTitle}>Andamento ordini (ultimi 30 giorni)</Text>
           <MiniBarChart data={stats?.last30 || []} />
         </View>
 
-        <View style={styles.section}>
+        <View style={responsiveStyles.section}>
           <RecentOrdersCard orders={recentOrders} />
         </View>
 
-        <View style={styles.section}>
-          <QuickList title="Prodotti a basso stock" items={lowStock} />
+        <View style={responsiveStyles.gridContainer}>
+          <View style={responsiveStyles.gridItem}>
+            <QuickList title="Prodotti a basso stock" items={lowStock} />
+          </View>
+          
+          {isTablet && <View style={responsiveStyles.gridItem}>
+            <QuickList title="Ultimi utenti" items={recentUsers} />
+          </View>}
         </View>
 
-        <View style={styles.section}>
+        {!isTablet && <View style={responsiveStyles.section}>
           <QuickList title="Ultimi utenti" items={recentUsers} />
+        </View>}
+
+        <View style={responsiveStyles.section}>
+          <View style={responsiveStyles.buttonsContainer}>
+            <Button 
+              mode="outlined" 
+              icon="test-tube" 
+              onPress={() => navigation.navigate('BackendTest')}
+              style={responsiveStyles.button}
+            >
+              Test Integrazione Backend
+            </Button>
+            
+            <Button 
+              mode="outlined" 
+              icon="bell-ring" 
+              onPress={() => navigation.navigate('NotificationTest')}
+              style={responsiveStyles.button}
+            >
+              🔔 Test Notifiche Push
+            </Button>
+          </View>
         </View>
 
       </ScrollView>
@@ -178,31 +278,36 @@ export default function DashboardScreen({ navigation }) {
   // Employee layout
   if (user?.role === 'employee') {
     return (
-      <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
-        <View style={[styles.headerRow, { alignItems: 'center' }] }>
-          <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+      <ScrollView 
+        style={responsiveStyles.container} 
+        contentContainerStyle={responsiveStyles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={responsiveStyles.headerRow}>
+          <View style={responsiveStyles.headerContent}>
+            <Text style={responsiveStyles.title}>Ciao {user?.name} 👋</Text>
+          </View>
           <IconButton
             icon="logout-variant"
-            size={24}
-            color={theme.colors.primary}
+            size={getComponentSize('iconSize')}
+            iconColor={theme.colors.primary}
             onPress={logout}
             accessibilityLabel="Logout"
-            style={{ marginLeft: 'auto' }}
           />
         </View>
 
-        <View style={styles.section}>
-          <Text style={{ fontWeight: '700', marginBottom: 8 }}>Ordini assegnati a te</Text>
+        <View style={responsiveStyles.section}>
+          <Text style={responsiveStyles.sectionTitle}>Ordini assegnati a te</Text>
           <QuickList items={[{ title: '#2001', meta: 'Scadenza: domani - In corso' }, { title: '#1999', meta: 'Scadenza: 3 giorni - In corso' }]} />
         </View>
 
-        <View style={styles.section}>
-          <Text style={{ fontWeight: '700' }}>Task giornalieri</Text>
+        <View style={responsiveStyles.section}>
+          <Text style={responsiveStyles.sectionTitle}>Task giornalieri</Text>
           <QuickList items={[{ title: 'Controllo spedizioni', meta: 'Oggi' }, { title: 'Verifica stock', meta: 'Oggi' }]} />
         </View>
 
-        <View style={styles.section}>
-          <Text style={{ fontWeight: '700', marginBottom: 8 }}>Ordini chiusi recentemente</Text>
+        <View style={responsiveStyles.section}>
+          <Text style={responsiveStyles.sectionTitle}>Ordini chiusi recentemente</Text>
           <MiniBarChart data={[2,3,1,4,2,3,5]} color="#4CAF50" />
         </View>
       </ScrollView>
@@ -211,38 +316,43 @@ export default function DashboardScreen({ navigation }) {
 
   // Customer layout
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingTop: 48 }}>
-      <View style={[styles.headerRow, { alignItems: 'center' }] }>
-        <Text style={styles.title}>Ciao {user?.name} 👋</Text>
+    <ScrollView 
+      style={responsiveStyles.container} 
+      contentContainerStyle={responsiveStyles.contentContainer}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={responsiveStyles.headerRow}>
+        <View style={responsiveStyles.headerContent}>
+          <Text style={responsiveStyles.title}>Ciao {user?.name} 👋</Text>
+        </View>
         <IconButton
           icon="logout-variant"
-          size={24}
-          color={theme.colors.primary}
+          size={getComponentSize('iconSize')}
+          iconColor={theme.colors.primary}
           onPress={logout}
           accessibilityLabel="Logout"
-          style={{ marginLeft: 'auto' }}
         />
       </View>
 
-      <View style={styles.section}>
-        <Text style={{ marginBottom: 12 }}>I miei ordini recenti</Text>
+      <View style={responsiveStyles.section}>
+        <Text style={responsiveStyles.sectionTitle}>I miei ordini recenti</Text>
         <QuickList items={[{ title: '#3001', meta: 'In corso' }, { title: '#2999', meta: 'Completato' }]} />
       </View>
 
-      <Button mode="contained" icon="plus" style={{ marginBottom: 12 }}>Nuovo ordine</Button>
+      <Button 
+        mode="contained" 
+        icon="plus" 
+        style={[responsiveStyles.button, { marginBottom: getSpacing(12) }]}
+      >
+        Nuovo ordine
+      </Button>
 
-      <View style={styles.section}>
-        <Text style={{ fontWeight: '700', marginBottom: 8 }}>Notifiche</Text>
+      <View style={responsiveStyles.section}>
+        <Text style={responsiveStyles.sectionTitle}>Notifiche</Text>
         <QuickList items={[{ title: 'Offerta 10% su ordini > 100€', meta: 'Scadenza: 30/09' }]} />
       </View>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9F9FB' },
-  title: { fontSize: 20, fontWeight: '700', marginBottom: 16, paddingTop: 12 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  row: { flexDirection: 'row', marginBottom: 16 },
-  section: { marginBottom: 18 }
-});
+// Stili rimossi - ora usati responsiveStyles inline

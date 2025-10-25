@@ -7,10 +7,14 @@ const LAN_IP = "192.168.1.135"; // <- updated to current host IP
 // Use the correct host depending on platform:
 // - Android physical device should use the LAN IP
 // - Other cases can use localhost
-const host = Platform.OS === "android" ? LAN_IP : "localhost";
+// Gestisce il caso in cui Platform.OS sia undefined (test environment)
+const host = (Platform?.OS === "android") ? LAN_IP : "localhost";
 
 // Default to host for development (unified backend). Use LAN_IP for physical devices.
-export const API_URL = __DEV__
+// Gestisce il caso in cui __DEV__ sia undefined (test environment)
+const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : true;
+
+export const API_URL = isDev
   ? `http://${host}:4000/api` // development uses host
   : `https://your-production-api.example.com/api`;
 

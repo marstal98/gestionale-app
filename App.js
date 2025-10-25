@@ -1,4 +1,24 @@
 import 'react-native-gesture-handler';
+
+// Sopprimi warning specifici di expo-notifications in Expo Go
+const originalWarn = console.warn;
+console.warn = (...args) => {
+  const message = args.join(' ');
+  if (message.includes('expo-notifications') && message.includes('not fully supported in Expo Go')) {
+    return; // Ignora questo warning specifico
+  }
+  originalWarn(...args);
+};
+
+const originalError = console.error;
+console.error = (...args) => {
+  const message = args.join(' ');
+  if (message.includes('expo-notifications') && message.includes('removed from Expo Go')) {
+    return; // Ignora questo errore specifico
+  }
+  originalError(...args);
+};
+
 import React, { useContext, useRef } from "react";
 import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -16,6 +36,7 @@ import FloatingToast from './src/components/FloatingToast';
 import { listen as listenToasts } from './src/utils/toastService';
 import AdminAccessRequestsScreen from "./src/screens/AdminAccessRequestsScreen";
 import { useDeepLinkHandler, parseTokenFromUrl } from './src/components/DeepLinkHandler';
+import { useResponsive, getComponentSize } from './src/utils/responsive';
 
 
 // Schermate
@@ -47,6 +68,7 @@ const theme = {
 // 🔹 Tabs Admin
 function AdminTabs({ pendingCount = 0, onPendingCountChange = () => {} }) {
   const { user } = useContext(AuthContext);
+  const { isTablet } = useResponsive();
   const userEmail = (user?.email || '').toString().toLowerCase().trim();
   const superEmail = (SUPERADMIN_EMAIL || '').toString().toLowerCase().trim();
 
@@ -55,6 +77,15 @@ function AdminTabs({ pendingCount = 0, onPendingCountChange = () => {} }) {
       screenOptions={({ route }) => ({
         tabBarActiveTintColor: "#7E57C2",
         tabBarInactiveTintColor: "#999",
+        tabBarLabelStyle: {
+          fontSize: isTablet ? 14 : 12,
+          marginBottom: isTablet ? 4 : 2,
+        },
+        tabBarStyle: {
+          height: isTablet ? 80 : 65,
+          paddingBottom: isTablet ? 10 : 5,
+          paddingTop: isTablet ? 8 : 5,
+        },
         tabBarIcon: ({ color, size }) => {
           let iconName;
           if (route.name === "Home") iconName = "home";
@@ -62,7 +93,8 @@ function AdminTabs({ pendingCount = 0, onPendingCountChange = () => {} }) {
           else if (route.name === "Utenti") iconName = "account-group";
           else if (route.name === "Ordini") iconName = "package-variant-closed";
           else if (route.name === "Impostazioni") iconName = "cog";
-          return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
+          const iconSize = isTablet ? Math.max(size, 28) : size;
+          return <MaterialCommunityIcons name={iconName} size={iconSize} color={color} />;
         },
       })}
       initialRouteName="Home"
@@ -78,11 +110,22 @@ function AdminTabs({ pendingCount = 0, onPendingCountChange = () => {} }) {
 
 // Super admin sees an extra tab for access requests management
 function SuperAdminTabs({ pendingCount = 0, onPendingCountChange }) {
+  const { isTablet } = useResponsive();
+  
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarActiveTintColor: "#7E57C2",
         tabBarInactiveTintColor: "#999",
+        tabBarLabelStyle: {
+          fontSize: isTablet ? 14 : 12,
+          marginBottom: isTablet ? 4 : 2,
+        },
+        tabBarStyle: {
+          height: isTablet ? 80 : 65,
+          paddingBottom: isTablet ? 10 : 5,
+          paddingTop: isTablet ? 8 : 5,
+        },
         tabBarIcon: ({ color, size }) => {
           let iconName;
           if (route.name === "Home") iconName = "home";
@@ -91,7 +134,8 @@ function SuperAdminTabs({ pendingCount = 0, onPendingCountChange }) {
           else if (route.name === "Ordini") iconName = "package-variant-closed";
           else if (route.name === "Richieste") iconName = "email-alert";
           else if (route.name === "Impostazioni") iconName = "cog";
-          return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
+          const iconSize = isTablet ? Math.max(size, 28) : size;
+          return <MaterialCommunityIcons name={iconName} size={iconSize} color={color} />;
         },
       })}
       initialRouteName="Home"
@@ -213,6 +257,8 @@ function RootNavigator() {
       <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ title: 'Reset password' }} />
       <Stack.Screen name="MainTabs" component={Tabs} options={{ headerShown: false }} />
       <Stack.Screen name="NewOrder" component={require('./src/screens/NewOrderScreen').default} options={{ title: 'Nuovo ordine' }} />
+      <Stack.Screen name="BackendTest" component={require('./src/screens/BackendTestScreen').default} options={{ headerShown: false }} />
+      <Stack.Screen name="NotificationTest" component={require('./src/screens/NotificationTestScreen').default} options={{ title: '🔔 Test Notifiche' }} />
     </Stack.Navigator>
   );
 }
